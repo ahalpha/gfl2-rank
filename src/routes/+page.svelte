@@ -2,12 +2,12 @@
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
+	import chars from '$lib/data/chars.json';
 
 	const API_ROOT = 'http://192.168.31.36:8000';
-	const RANK_ID = 1078;
+	const INITIAL_RANK_ID = 1078;
 	const DRAG_UPDATE_INTERVAL = 70;
-	// Files in static/ are served from the site root by SvelteKit.
-	const defaultAvatar = '/Avatar/1078.png';
+	const supporters = Object.entries(chars).map(([id, name]) => ({ id: Number(id), name }));
 
 	type JsonRecord = Record<string, unknown>;
 	type TimelinePoint = {
@@ -42,6 +42,9 @@
 	let rankRefreshing = $state(false);
 	let timelineError = $state('');
 	let rankError = $state('');
+	let supporterPanelOpen = $state(false);
+	let rankId = $state(INITIAL_RANK_ID);
+	let supporterSortDescending = $state(false);
 	let chartScores = $state<Record<number, ChartScorePoint>>({});
 	let snapshots = $state<RankSnapshot[]>([]);
 	let rankController: AbortController | undefined;
@@ -275,6 +278,38 @@
 
 	function movementAmount(entry: RankEntry): number {
 		return Math.abs(entry.rank - (entry.previousRank ?? entry.rank));
+	}
+
+	function handleWindowKeydown(event: KeyboardEvent) {
+		if (event.key === 'Escape') supporterPanelOpen = false;
+	}
+
+	function avatarUrl(id: number): string {
+		return `/Avatar/${id}.png`;
+	}
+
+	function selectedSupporterName(): string {
+		return String(chars[String(rankId) as keyof typeof chars] ?? `人形 ${rankId}`);
+	}
+
+	function sortedSupporters() {
+		return supporterSortDescending ? [...supporters].reverse() : supporters;
+	}
+
+	async function selectSupporter(id: number) {
+		supporterPanelOpen = false;
+		if (id === rankId) return;
+		rankController?.abort();
+		rankId = id;
+		timeline = [];
+		snapshots = [];
+		chartScores = {};
+		ranks = [];
+		selectedIndex = 0;
+		displayedIndex = 0;
+		timelineLoading = true;
+		rankLoading = true;
+		await loadTimeline();
 	}
 
 	function normalizeSnapshots(payload: unknown): RankSnapshot[] {
@@ -523,7 +558,7 @@
 		rankController?.abort();
 		rankController = new AbortController();
 		try {
-			const payload = await getBinary(`https://gf2-api.hamelon.cfd/gun_rank/${RANK_ID}`, rankController.signal);
+			const payload = await getBinary(`https://gf2-api.hamelon.cfd/gun_rank/${rankId}`, rankController.signal);
 			const nextSnapshots = decodeGunRanks(payload);
 			if (!nextSnapshots.length) throw new Error('接口未返回有效排行快照');
 			snapshots = nextSnapshots;
@@ -631,6 +666,8 @@
 	});
 </script>
 
+<svelte:window onkeydown={handleWindowKeydown} />
+
 <svelte:head>
 	<title>闪耀星愿排行榜 · 第三期</title>
 	<meta
@@ -640,15 +677,89 @@
 </svelte:head>
 
 <main class="page-shell">
+	<a class="channel-float" href="https://t.me/GF2Lib" target="_blank" rel="noreferrer" aria-label="加入频道">
+		<strong>加入频道</strong>
+		<span aria-hidden="true">
+			<svg viewBox="0 0 24 24"><path d="M20.7 3.4 3.8 9.9c-1.2.5-1.2 1.1-.2 1.4l4.3 1.4 1.7 5.1c.2.6.1.8.8.8.5 0 .8-.2 1-.4l2.1-2 4.4 3.2c.8.5 1.4.3 1.6-.8l2.8-13.3c.3-1.4-.5-2.1-1.6-1.9ZM9.6 12.4l8.4-5.3c.4-.2.8-.1.5.2l-6.9 6.2-.3 3.1-1.7-4.2Z" /></svg>
+		</span>
+	</a>
+
+	{#if supporterPanelOpen}
+		<button
+			class="supporter-backdrop"
+			onclick={() => (supporterPanelOpen = false)}
+			aria-label="关闭应援人形侧栏"
+		></button>
+		<aside class="supporter-panel" aria-label="应援人形" aria-modal="true" role="dialog">
+			<div class="supporter-panel-header">
+				<div>
+					<strong>选择应援人形</strong>
+				</div>
+				<div class="supporter-panel-actions">
+					<a href="https://t.me/GF2Lib" target="_blank" rel="noreferrer" aria-label="加入频道">
+						<strong>加入频道</strong>
+						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.7 3.4 3.8 9.9c-1.2.5-1.2 1.1-.2 1.4l4.3 1.4 1.7 5.1c.2.6.1.8.8.8.5 0 .8-.2 1-.4l2.1-2 4.4 3.2c.8.5 1.4.3 1.6-.8l2.8-13.3c.3-1.4-.5-2.1-1.6-1.9ZM9.6 12.4l8.4-5.3c.4-.2.8-.1.5.2l-6.9 6.2-.3 3.1-1.7-4.2Z" /></svg>
+					</a>
+					<button onclick={() => (supporterPanelOpen = false)} aria-label="关闭侧栏" title="关闭">
+						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+					</button>
+				</div>
+			</div>
+			<div class="supporter-filters" aria-label="角色分类">
+				<button class="active" aria-label="全部角色" title="全部角色"><i>◆</i></button>
+				<button aria-label="防御" title="防御"><i>⬡</i></button>
+				<button aria-label="火力" title="火力"><i>●</i></button>
+				<button aria-label="突击" title="突击"><i>ϟ</i></button>
+				<button aria-label="支援" title="支援"><i>✦</i></button>
+				<button aria-label="其他" title="其他"><i>•••</i></button>
+			</div>
+			<div class="supporter-grid">
+				{#each sortedSupporters() as supporter (supporter.id)}
+					<button
+						class="supporter-card"
+						class:active={supporter.id === rankId}
+						onclick={() => selectSupporter(supporter.id)}
+						aria-label={`选择${supporter.name}`}
+					>
+						<div class="supporter-portrait">
+							<span>{supporter.name.slice(0, 1)}</span>
+							<img
+								src={avatarUrl(supporter.id)}
+								alt=""
+								onload={(event) => ((event.currentTarget as HTMLImageElement).hidden = false)}
+								onerror={(event) => ((event.currentTarget as HTMLImageElement).hidden = true)}
+							/>
+							<small>{supporter.name}</small>
+						</div>
+						<div class="supporter-card-score"><i>●</i><strong>0</strong></div>
+					</button>
+				{/each}
+			</div>
+			<div class="supporter-sortbar">
+				<strong>默认排序</strong>
+				<button onclick={() => (supporterSortDescending = !supporterSortDescending)} aria-label="切换排序方向" title="切换排序方向">{supporterSortDescending ? '↓' : '↑'}</button>
+			</div>
+		</aside>
+	{/if}
+
 	<section class="rank-section" aria-label="排行榜">
 		<div class="section-heading">
 			<div class="supporter-lockup">
-				<div class="supporter-avatar" aria-hidden="true">
-					{#if defaultAvatar}<img src={defaultAvatar} alt="" />{:else}<span>G</span>{/if}
-				</div>
+				<button
+					class="supporter-avatar"
+					onclick={() => (supporterPanelOpen = true)}
+					aria-label="打开应援人形侧栏"
+					title="应援人形"
+				>
+					<span>{selectedSupporterName().slice(0, 1)}</span>
+					{#key rankId}
+						<img src={avatarUrl(rankId)} alt={selectedSupporterName()} onerror={(event) => ((event.currentTarget as HTMLImageElement).hidden = true)} />
+					{/key}
+					<i aria-hidden="true"><b></b><b></b></i>
+				</button>
 				<div class="supporter-copy">
 					<span>当前应援人形：</span>
-					<strong>芙铃</strong>
+					<strong>{selectedSupporterName()}</strong>
 				</div>
 			</div>
 			<div class="record-lockup">
