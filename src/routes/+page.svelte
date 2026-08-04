@@ -632,10 +632,10 @@
 </script>
 
 <svelte:head>
-	<title>火力支援排行 · GFL2</title>
+	<title>闪耀星愿排行榜 · 第三期</title>
 	<meta
 		name="description"
-		content="少女前线 2 火力支援动态排行榜，可沿时间轴回看历史名次。"
+		content="少女前线2：追放闪耀星愿排行榜。"
 	/>
 </svelte:head>
 
