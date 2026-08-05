@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
-	import { decompressGzip } from '$lib/gzip';
 	import { decodeScoreData } from '$lib/rank-decoder';
 	import chars from '$lib/data/chars.json';
 
@@ -26,61 +25,18 @@
 		month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
 	});
 
-	function epochFromI64(value: bigint): number {
-		const absolute = value < 0n ? -value : value;
-		let milliseconds: bigint;
-		if (absolute >= 100_000_000_000_000_000n) milliseconds = value / 1_000_000n;
-		else if (absolute >= 100_000_000_000_000n) milliseconds = value / 1_000n;
-		else if (absolute >= 100_000_000_000n) milliseconds = value;
-		else milliseconds = value * 1_000n;
-		const epoch = Number(milliseconds);
-		if (!Number.isSafeInteger(epoch)) throw new Error('总分数据包含无效时间');
-		return epoch;
-	}
-
-	function decodeScores(buffer: ArrayBuffer): ScoreSnapshot[] {
-		const view = new DataView(buffer);
-		if (view.byteLength < 4) throw new Error('总分数据不完整');
-		const count = view.getUint32(0, true);
-		const recordBytes = 8 + characterIds.length * 4;
-		const expectedBytes = 4 + count * recordBytes;
-		if (expectedBytes > view.byteLength) throw new Error('总分数据长度与时间数量不匹配');
-		let offset = 4;
+	async function decodeScorePayload(buffer: ArrayBuffer): Promise<ScoreSnapshot[]> {
+		const decoded = await decodeScoreData(buffer, characterIds.length);
 		const result: ScoreSnapshot[] = [];
-		for (let index = 0; index < count; index += 1) {
-			const rawTime = view.getBigInt64(offset, true);
-			offset += 8;
+		for (let snapshotIndex = 0; snapshotIndex < decoded.times.length; snapshotIndex += 1) {
+			const epoch = decoded.times[snapshotIndex];
 			const scores = new Map<number, number>();
-			for (const id of characterIds) {
-				scores.set(id, view.getUint32(offset, true));
-				offset += 4;
+			for (let characterIndex = 0; characterIndex < characterIds.length; characterIndex += 1) {
+				scores.set(characterIds[characterIndex], decoded.scores[snapshotIndex * decoded.characterCount + characterIndex]);
 			}
-			const epoch = epochFromI64(rawTime);
 			result.push({ point: { raw: epoch, epoch }, scores });
 		}
 		return result.sort((a, b) => a.point.epoch - b.point.epoch);
-	}
-
-	async function decodeScorePayload(buffer: ArrayBuffer): Promise<ScoreSnapshot[]> {
-		try {
-			const decoded = await decodeScoreData(buffer, characterIds.length);
-			const result: ScoreSnapshot[] = [];
-			for (let snapshotIndex = 0; snapshotIndex < decoded.times.length; snapshotIndex += 1) {
-				const epoch = decoded.times[snapshotIndex];
-				const scores = new Map<number, number>();
-				for (let characterIndex = 0; characterIndex < characterIds.length; characterIndex += 1) {
-					scores.set(characterIds[characterIndex], decoded.scores[snapshotIndex * decoded.characterCount + characterIndex]);
-				}
-				result.push({ point: { raw: epoch, epoch }, scores });
-			}
-			return result.sort((a, b) => a.point.epoch - b.point.epoch);
-		} catch (wasmError) {
-			try {
-				return decodeScores(await decompressGzip(buffer, '总分 gzip 数据解压失败'));
-			} catch {
-				throw wasmError;
-			}
-		}
 	}
 
 	function rankSnapshot(snapshot: ScoreSnapshot): CharacterScore[] {

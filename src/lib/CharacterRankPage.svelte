@@ -3,7 +3,6 @@
 	import { goto } from '$app/navigation';
 	import { fade } from 'svelte/transition';
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
-	import { decompressGzip } from '$lib/gzip';
 	import { decodeRankData } from '$lib/rank-decoder';
 	import chars from '$lib/data/chars.json';
 
@@ -388,157 +387,27 @@
 		};
 	}
 
-	function decodeGunRanksFallback(buffer: ArrayBuffer): RankSnapshot[] {
-		const view = new DataView(buffer);
-		const decoder = new TextDecoder('utf-8');
-		const SNAPSHOT_BYTES = 8 + 100 * 8;
-		let offset = 0;
-
-		function ensure(bytes: number, field: string) {
-			if (offset + bytes > view.byteLength) throw new Error(`榜单数据不完整：${field}`);
-		}
-
-		function readU16(field: string): number {
-			ensure(2, field);
-			const value = view.getUint16(offset, true);
-			offset += 2;
-			return value;
-		}
-
-		function readU32(field: string): number {
-			ensure(4, field);
-			const value = view.getUint32(offset, true);
-			offset += 4;
-			return value;
-		}
-
-		function readI64(field: string): bigint {
-			ensure(8, field);
-			const value = view.getBigInt64(offset, true);
-			offset += 8;
-			return value;
-		}
-
-		function timestampToEpoch(value: bigint, field: string): number {
-			const absolute = value < 0n ? -value : value;
-			let milliseconds: bigint;
-			if (absolute >= 100_000_000_000_000_000n) {
-				milliseconds = value / 1_000_000n;
-			} else if (absolute >= 100_000_000_000_000n) {
-				milliseconds = value / 1_000n;
-			} else if (absolute >= 100_000_000_000n) {
-				milliseconds = value;
-			} else {
-				milliseconds = value * 1_000n;
-			}
-
-			const epoch = Number(milliseconds);
-			const minimumEpoch = Date.UTC(2000, 0, 1);
-			const maximumEpoch = Date.UTC(2200, 0, 1);
-			if (!Number.isSafeInteger(epoch) || epoch < minimumEpoch || epoch > maximumEpoch) {
-				throw new Error(`榜单数据无效：${field} 不是有效时间戳`);
-			}
-			return epoch;
-		}
-
-		const rankSize = readU32('排行大小');
-		const maxSnapshotCount = Math.floor((view.byteLength - offset - 4) / SNAPSHOT_BYTES);
-		let snapshotCount: number;
-		let rankSectionEnd: number;
-		if (rankSize <= maxSnapshotCount) {
-			snapshotCount = rankSize;
-			rankSectionEnd = offset + snapshotCount * SNAPSHOT_BYTES;
-		} else if (rankSize % SNAPSHOT_BYTES === 0 && offset + rankSize + 4 <= view.byteLength) {
-			snapshotCount = rankSize / SNAPSHOT_BYTES;
-			rankSectionEnd = offset + rankSize;
-		} else {
-			throw new Error('榜单数据无效：排行大小与数据长度不匹配');
-		}
-
+	async function decodeGunRanks(buffer: ArrayBuffer): Promise<RankSnapshot[]> {
+		const decoded = await decodeRankData(buffer);
 		const decodedSnapshots: RankSnapshot[] = [];
-		for (let snapshotIndex = 0; snapshotIndex < snapshotCount; snapshotIndex += 1) {
-			const encodedTime = readI64(`时间 ${snapshotIndex + 1}`);
-			const epoch = timestampToEpoch(encodedTime, `时间 ${snapshotIndex + 1}`);
-			const rawTime = epoch;
+		for (let snapshotIndex = 0; snapshotIndex < decoded.times.length; snapshotIndex += 1) {
+			const epoch = decoded.times[snapshotIndex];
 			const entries: RankEntry[] = [];
 			for (let rankIndex = 0; rankIndex < 100; rankIndex += 1) {
-				const uid = readU32(`UID ${rankIndex + 1}`);
-				const score = readU32(`分数 ${rankIndex + 1}`);
+				const index = snapshotIndex * 100 + rankIndex;
+				const uid = decoded.uids[index];
+				const info = decoded.info.get(uid);
 				entries.push({
 					id: String(uid),
-					name: `UID ${uid}`,
-					level: '--',
-					score,
+					name: info?.name ?? `UID ${uid}`,
+					level: info ? String(info.level) : '--',
+					score: decoded.scores[index],
 					rank: rankIndex + 1
 				});
 			}
-			decodedSnapshots.push({ point: { raw: rawTime, epoch }, entries });
+			decodedSnapshots.push({ point: { raw: epoch, epoch }, entries });
 		}
-		if (offset !== rankSectionEnd) throw new Error('榜单数据无效：排行区偏移不匹配');
-
-		const infoSize = readU32('信息大小');
-		const remainingBytes = view.byteLength - offset;
-		const infoIsCount = infoSize <= Math.floor(remainingBytes / 10);
-		const infoCount = infoIsCount ? infoSize : Number.POSITIVE_INFINITY;
-		const infoSectionEnd = infoIsCount ? view.byteLength : offset + infoSize;
-		if (infoSectionEnd > view.byteLength) throw new Error('榜单数据无效：信息大小超出数据长度');
-
-		const userInfo = new Map<number, { name: string; level: number }>();
-		let infoIndex = 0;
-		while (infoIndex < infoCount && offset < infoSectionEnd) {
-			const uid = readU32(`信息 UID ${infoIndex + 1}`);
-			const nameSize = readU32(`名字大小 ${infoIndex + 1}`);
-			if (offset + nameSize + 2 > infoSectionEnd) throw new Error(`榜单数据不完整：名字 ${infoIndex + 1}`);
-			const name = decoder.decode(new Uint8Array(buffer, offset, nameSize));
-			offset += nameSize;
-			const level = readU16(`等级 ${infoIndex + 1}`);
-			userInfo.set(uid, { name, level });
-			infoIndex += 1;
-		}
-		if (infoIsCount && infoIndex !== infoCount) throw new Error('榜单数据不完整：信息记录数量不足');
-
-		for (const snapshot of decodedSnapshots) {
-			for (const entry of snapshot.entries) {
-				const info = userInfo.get(Number(entry.id));
-				if (info) {
-					entry.name = info.name;
-					entry.level = String(info.level);
-				}
-			}
-		}
-
 		return decodedSnapshots.sort((a, b) => a.point.epoch - b.point.epoch);
-	}
-
-	async function decodeGunRanks(buffer: ArrayBuffer): Promise<RankSnapshot[]> {
-		try {
-			const decoded = await decodeRankData(buffer);
-			const decodedSnapshots: RankSnapshot[] = [];
-			for (let snapshotIndex = 0; snapshotIndex < decoded.times.length; snapshotIndex += 1) {
-				const epoch = decoded.times[snapshotIndex];
-				const entries: RankEntry[] = [];
-				for (let rankIndex = 0; rankIndex < 100; rankIndex += 1) {
-					const index = snapshotIndex * 100 + rankIndex;
-					const uid = decoded.uids[index];
-					const info = decoded.info.get(uid);
-					entries.push({
-						id: String(uid),
-						name: info?.name ?? `UID ${uid}`,
-						level: info ? String(info.level) : '--',
-						score: decoded.scores[index],
-						rank: rankIndex + 1
-					});
-				}
-				decodedSnapshots.push({ point: { raw: epoch, epoch }, entries });
-			}
-			return decodedSnapshots.sort((a, b) => a.point.epoch - b.point.epoch);
-		} catch (wasmError) {
-			try {
-				return decodeGunRanksFallback(await decompressGzip(buffer, 'Failed to decode'));
-			} catch {
-				throw wasmError;
-			}
-		}
 	}
 
 	async function getBinary(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
