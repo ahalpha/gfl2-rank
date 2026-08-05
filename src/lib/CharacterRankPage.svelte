@@ -648,9 +648,14 @@
 					aria-label="打开应援人形侧栏"
 					title="应援人形"
 				>
-					<span>{selectedSupporterName().slice(0, 1)}</span>
 					{#key rankId}
-						<img src={avatarUrl(rankId)} alt={selectedSupporterName()} onerror={(event) => ((event.currentTarget as HTMLImageElement).hidden = true)} />
+						<img
+							src={avatarUrl(rankId)}
+							alt=""
+							hidden
+							onload={(event) => ((event.currentTarget as HTMLImageElement).hidden = false)}
+							onerror={(event) => ((event.currentTarget as HTMLImageElement).hidden = true)}
+						/>
 					{/key}
 					<i aria-hidden="true"><b></b><b></b></i>
 				</button>
