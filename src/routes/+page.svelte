@@ -4,7 +4,6 @@
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
 	import chars from '$lib/data/chars.json';
 
-	const API_ROOT = 'http://192.168.31.36:8000';
 	const INITIAL_RANK_ID = 1078;
 	const DRAG_UPDATE_INTERVAL = 70;
 	const supporters = Object.entries(chars).map(([id, name]) => ({ id: Number(id), name }));
@@ -508,6 +507,21 @@
 		return decodedSnapshots.sort((a, b) => a.point.epoch - b.point.epoch);
 	}
 
+	async function decompressGzip(buffer: ArrayBuffer): Promise<ArrayBuffer> {
+		const bytes = new Uint8Array(buffer);
+		if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) return buffer;
+		if (typeof DecompressionStream === 'undefined') {
+			throw new Error('Failed to decode');
+		}
+
+		try {
+			const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
+			return await new Response(stream).arrayBuffer();
+		} catch {
+			throw new Error('Failed to decode');
+		}
+	}
+
 	async function getBinary(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
 		const timeoutController = new AbortController();
 		const abortFromCaller = () => timeoutController.abort(signal?.reason);
@@ -520,7 +534,7 @@
 		try {
 			const response = await fetch(url, { signal: timeoutController.signal });
 			if (!response.ok) throw new Error(`请求失败 (${response.status})`);
-			return response.arrayBuffer();
+			return decompressGzip(await response.arrayBuffer());
 		} catch (error) {
 			if (error instanceof DOMException && error.name === 'TimeoutError') {
 				throw new Error('接口响应超时');
