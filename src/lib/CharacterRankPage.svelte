@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { fade } from 'svelte/transition';
+	import BossHealth from '$lib/BossHealth.svelte';
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
 	import { decodeRankData } from '$lib/rank-decoder';
 	import chars from '$lib/data/chars.json';
@@ -579,6 +580,7 @@
 </svelte:head>
 
 <main class="page-shell">
+	<div class="page-boss-health"><BossHealth selectedEpoch={timeline[displayedIndex]?.epoch} /></div>
 	<!-- 宽屏右侧悬浮频道入口暂时停用。 -->
 
 	{#if supporterPanelOpen}

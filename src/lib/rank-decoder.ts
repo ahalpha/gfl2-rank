@@ -7,6 +7,7 @@ type DecoderExports = WebAssembly.Exports & {
 };
 
 export type DecodedScoreData = { times: Float64Array; scores: Uint32Array; characterCount: number };
+export type DecodedBossInfo = { times: Float64Array; health: bigint[] };
 export type DecodedRankData = {
 	times: Float64Array;
 	uids: Uint32Array;
@@ -60,6 +61,17 @@ export async function decodeScoreData(buffer: ArrayBuffer, expectedCharacterCoun
 	offset += count * 8;
 	const scores = new Uint32Array(bytes.slice(offset, offset + count * characterCount * 4).buffer);
 	return { times, scores, characterCount };
+}
+
+export async function decodeBossInfo(buffer: ArrayBuffer): Promise<DecodedBossInfo> {
+	// One u64 health value has the same byte layout as two little-endian u32 values.
+	const decoded = await decodeScoreData(buffer, 2);
+	const health = Array.from({ length: decoded.times.length }, (_, index) => {
+		const low = BigInt(decoded.scores[index * 2]);
+		const high = BigInt(decoded.scores[index * 2 + 1]);
+		return low | (high << 32n);
+	});
+	return { times: decoded.times, health };
 }
 
 export async function decodeRankData(buffer: ArrayBuffer): Promise<DecodedRankData> {

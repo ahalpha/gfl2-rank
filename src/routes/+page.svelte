@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import BossHealth from '$lib/BossHealth.svelte';
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
 	import { decodeScoreData } from '$lib/rank-decoder';
 	import chars from '$lib/data/chars.json';
@@ -105,6 +106,7 @@
 </svelte:head>
 
 <main class="overall-page">
+	<div class="overall-boss-health"><BossHealth selectedEpoch={timeline[selectedIndex]?.epoch} /></div>
 	<header class="overall-heading">
 		<div class="overall-title">
 			<h1>人形排行</h1>
@@ -179,19 +181,20 @@
 </main>
 
 <style>
-	.overall-page { width:100%; height:100dvh; min-height:0; padding:24px 0 150px; overflow:hidden; color:#25292c; }
+	.overall-page { width:100%; height:100dvh; min-height:0; padding:0 0 150px; overflow:hidden; color:#25292c; }
+	.overall-boss-health { width:100%; margin:0 0 8px; }
 	.overall-heading,.overall-content,.overall-state { width:min(1120px,calc(100% - 40px)); margin-left:auto; margin-right:auto; }
-	.overall-heading { min-height:56px; display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; padding:0 16px; }
+	.overall-heading { min-height:56px; display:flex; align-items:center; justify-content:space-between; margin-top:24px; margin-bottom:20px; padding:0 17px; }
 	.overall-heading h1 { margin:0; font-size:24px; line-height:1; font-weight:900; letter-spacing:0; }
 	.overall-title { display:flex; align-items:center; gap:18px; }
 	.overall-title > a { height:30px; padding:0 9px 0 12px; display:flex; align-items:center; justify-content:center; gap:6px; color:#fff; background:#2da9df; border-radius:16px; text-decoration:none; transform:translateY(2px); }
 	.overall-title > a strong { font-size:12px; line-height:1; white-space:nowrap; }
 	.overall-title > a svg { width:17px; height:17px; display:block; flex:0 0 auto; fill:currentColor; }
-	.overall-actions { display:flex; align-items:center; gap:18px; }
+	.overall-actions { display:flex; align-items:center; gap:17.7px; }
 	.overall-actions > div { display:grid; gap:2px; text-align:right; }
 	.overall-actions > div span { color:#747a80; font-size:11px; font-weight:800; letter-spacing:0; }
 	.overall-actions > div strong { color:#202327; font:800 16px Consolas,monospace; }
-	.overall-actions button { width:42px; height:42px; display:grid; place-items:center; color:#fff; background:#34383b; border:1px solid #555b5f; border-radius:3px; }
+	.overall-actions button { width:42px; height:42px; display:grid; place-items:center; color:#fff; background:#34383b; border:1px solid #555b5f; border-radius:3px;}
 	.overall-actions svg { width:24px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 	.overall-content { display:grid; grid-template-columns:.78fr 1fr; gap:18px; align-items:start; }
 	.podium-grid { grid-column:2; align-self:center; display:grid; grid-template-columns:1fr 1fr; gap:14px; }
@@ -213,7 +216,8 @@
 	.podium-info { position:absolute; z-index:2; inset:auto 8px 3px; height:43px; padding:4px 8px; display:flex; align-items:center; justify-content:space-between; color:#292d30; background:transparent; }
 	.podium-info strong { font-size:22px; }
 	.podium-info span { font-size:21px; font-weight:900; }
-	.overall-list { grid-column:1; grid-row:1; height:max(240px,calc(100dvh - 210px)); min-height:0; display:grid; align-content:start; gap:8px; overflow:auto; }
+	.overall-list { grid-column:1; grid-row:1; height:max(240px,calc(100dvh - 160px)); min-height:0; display:grid; align-content:start; gap:8px; overflow:auto; padding-bottom:80px; scrollbar-width:none; -ms-overflow-style:none; }
+	.overall-list::-webkit-scrollbar { display:none; }
 	.overall-row { min-height:66px; padding:5px 18px 5px 14px; display:grid; grid-template-columns:66px 48px 1fr auto; align-items:center; gap:10px; overflow:hidden; color:#f4f5f5; background:#3b3f42; border:3px solid #c3c6c8; border-radius:34px; text-decoration:none; box-shadow:inset 5px 0 #8b9195; }
 	.overall-row > strong { width:100%; padding-right:4px; font-size:26px; line-height:1; font-style:italic; text-align:center; transform:translate(-10px,-1px); }
 	.overall-row img { width:46px; height:46px; object-fit:cover; border:2px solid #858c90; border-radius:50%; }
@@ -233,15 +237,17 @@
 	.row-skeleton i:nth-child(4) { width:82px; justify-self:end; }
 	@keyframes overall-shimmer { to { background-position:-160% 0; } }
 	@media(max-width:760px) {
-		.overall-page { height:auto; min-height:100vh; padding:12px 0 140px; overflow:visible; }
+		.overall-page { height:auto; min-height:100vh; padding:0 0 40px; overflow:visible; }
 		.overall-heading,.overall-content,.overall-state { width:calc(100% - 12px); }
-		.overall-heading { min-height:46px; padding:0 10px; margin-bottom:15px; }
+		.overall-boss-health { width:100%; margin-bottom:6px; padding:0; }
+		.overall-heading { min-height:46px; padding:0 10px; margin-top:12px; margin-bottom:15px; }
 		.overall-heading h1 { font-size:20px; }
 		.overall-title { gap:10px; }
 		.overall-title > a { height:28px; padding:0 7px 0 9px; gap:4px; }
 		.overall-title > a strong { font-size:11px; }
 		.overall-title > a svg { width:15px; height:15px; }
 		.overall-actions { gap:8px; }
+		.overall-actions > div span { font-size:9px; }
 		.overall-actions > div strong { font-size:11px; }
 		.overall-content { display:flex; flex-direction:column; }
 		.podium-grid { width:100%; }
