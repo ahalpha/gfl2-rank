@@ -572,7 +572,7 @@
 		rankController?.abort();
 		rankController = new AbortController();
 		try {
-			const payload = await getBinary(`https://gf2-api.hamelon.cfd/gun_rank/${rankId}`, rankController.signal);
+			const payload = await getBinary(`https://gf2-api.hamelon.cfd/worldboss_3/gun_rank/${rankId}`, rankController.signal);
 			const nextSnapshots = decodeGunRanks(payload);
 			if (!nextSnapshots.length) throw new Error('接口未返回有效排行快照');
 			snapshots = nextSnapshots;
