@@ -148,13 +148,20 @@ button { cursor: pointer; }
 .supporter-portrait > span { font-size: 34px; font-weight: 900; opacity: .38; }
 .supporter-portrait img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: cover; }
 .supporter-portrait small { position: absolute; z-index: 1; inset: auto 0 0; padding: 16px 4px 5px; overflow: hidden; color: #fff; background: linear-gradient(transparent,rgba(31,34,37,.88)); font-size: clamp(11px,3.4vw,18px); font-weight: 900; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
-.supporter-card-score { height: 27px; min-height: 27px; flex: 0 0 27px; display: flex; align-items: center; justify-content: center; gap: 5px; border-top: 4px solid #ffb356; }
+.supporter-card-score { height: 27px; min-height: 27px; padding: 0 5px; flex: 0 0 27px; display: flex; align-items: center; justify-content: center; gap: 5px; border-top: 4px solid #ffb356; }
 .supporter-card.active .supporter-card-score { border-top-color: #e93b60; }
 .supporter-card-score i { color: #e93b60; font-size: 13px; font-style: normal; }
-.supporter-card-score strong { font-size: 16px; }
-.supporter-sortbar { margin: 0 4px; min-height: 44px; display: grid; grid-template-columns: 1fr 44px; border: 2px solid #92999d; background: rgba(255,255,255,.56); }
-.supporter-sortbar > strong { padding: 9px 12px; color: #40535c; font-size: 18px; }
-.supporter-sortbar button { border: 0; border-left: 2px solid #92999d; color: #40535c; background: transparent; font-size: 24px; font-weight: 900; }
+.supporter-card-score strong { min-width:0; overflow:hidden; font-size:16px; text-overflow:ellipsis; white-space:nowrap; }
+.supporter-sortbar { position:relative; margin:0 4px; min-height:44px; display:grid; grid-template-columns:1fr 44px; border:2px solid #92999d; background:rgba(255,255,255,.56); }
+.supporter-sort-select { position:relative; min-width:0; }
+.supporter-sortbar button { color:#40535c; font-weight:900; }
+.sort-trigger { width:100%; height:40px; padding:0 12px; display:flex; align-items:center; border:0; background:transparent; }
+.sort-trigger strong { font-size:18px; }
+.supporter-sort-menu { position:absolute; z-index:4; left:-2px; right:-2px; bottom:calc(100% + 7px); padding:5px; display:grid; gap:2px; background:#34383b; border:2px solid #92999d; box-shadow:0 8px 20px rgba(24,28,30,.3); }
+.supporter-sort-menu button { position:relative; height:38px; padding:0 34px 0 10px; border:0; color:#f2f3f3; background:transparent; font-size:14px; text-align:left; }
+.supporter-sort-menu button:hover,.supporter-sort-menu button:focus-visible { background:#474c50; outline:none; }
+.supporter-sort-menu button.selected::after { content:'✓'; position:absolute; right:11px; color:#83c3ff; font-size:16px; }
+.supporter-sortbar button.sort-direction { border:0; border-left:2px solid #92999d; background:transparent; color:#40535c; font-size:24px; }
 @keyframes supporter-panel-in { from { opacity: 0; transform: translateX(-28px); } }
 @keyframes backdrop-in { from { opacity: 0; } }
 .refresh-button {

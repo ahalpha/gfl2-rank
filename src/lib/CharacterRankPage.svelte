@@ -4,11 +4,14 @@
 	import { fade } from 'svelte/transition';
 	import BossHealth from '$lib/BossHealth.svelte';
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
-	import { decodeRankData } from '$lib/rank-decoder';
+	import { decodeRankData, decodeScoreData } from '$lib/rank-decoder';
 	import chars from '$lib/data/chars.json';
 
 	const DRAG_UPDATE_INTERVAL = 70;
-	const supporters = Object.entries(chars).map(([id, name]) => ({ id: Number(id), name }));
+	const POPULARITY_URL = 'https://gf2-api.hamelon.cfd/worldboss_3/rank/score';
+	const supporters = Object.entries(chars)
+		.map(([id, name]) => ({ id: Number(id), name }))
+		.sort((a, b) => a.id - b.id);
 	let { initialRankId = 1078 }: { initialRankId?: number } = $props();
 
 	type JsonRecord = Record<string, unknown>;
@@ -34,6 +37,7 @@
 		point: TimelinePoint;
 		entries: RankEntry[];
 	};
+	type SupporterPopularity = { score: number; rank: number };
 
 	let timeline = $state<TimelinePoint[]>([]);
 	let selectedIndex = $state(0);
@@ -46,10 +50,14 @@
 	let rankError = $state('');
 	let supporterPanelOpen = $state(false);
 	let rankId = $state(initialRankId);
+	let supporterSortMode = $state<'default' | 'popularity'>('popularity');
+	let supporterSortMenuOpen = $state(false);
 	let supporterSortDescending = $state(false);
 	let chartScores = $state<Record<number, ChartScorePoint>>({});
 	let snapshots = $state<RankSnapshot[]>([]);
+	let supporterPopularity = $state<Map<number, SupporterPopularity>>(new Map());
 	let rankController: AbortController | undefined;
+	let popularityController: AbortController | undefined;
 	let dragBaseline: RankEntry[] | undefined;
 	let queuedDragIndex: number | undefined;
 	let dragRequestRunning = false;
@@ -282,7 +290,19 @@
 	}
 
 	function handleWindowKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') supporterPanelOpen = false;
+		if (event.key !== 'Escape') return;
+		if (supporterSortMenuOpen) supporterSortMenuOpen = false;
+		else supporterPanelOpen = false;
+	}
+
+	function selectSupporterSortMode(mode: 'default' | 'popularity') {
+		supporterSortMode = mode;
+		supporterSortMenuOpen = false;
+	}
+
+	function handleSortFocusOut(event: FocusEvent) {
+		const container = event.currentTarget as HTMLElement;
+		if (!container.contains(event.relatedTarget as Node | null)) supporterSortMenuOpen = false;
 	}
 
 	function avatarUrl(id: number): string {
@@ -294,7 +314,13 @@
 	}
 
 	function sortedSupporters() {
-		return supporterSortDescending ? [...supporters].reverse() : supporters;
+		const sorted = supporterSortMode === 'popularity'
+			? [...supporters].sort((a, b) =>
+				(supporterPopularity.get(a.id)?.rank ?? Number.POSITIVE_INFINITY) -
+				(supporterPopularity.get(b.id)?.rank ?? Number.POSITIVE_INFINITY) || a.id - b.id
+			)
+			: [...supporters];
+		return supporterSortDescending ? sorted.reverse() : sorted;
 	}
 
 	async function selectSupporter(id: number) {
@@ -435,6 +461,31 @@
 		}
 	}
 
+	async function loadSupporterPopularity() {
+		popularityController?.abort();
+		popularityController = new AbortController();
+		try {
+			const payload = await getBinary(POPULARITY_URL, popularityController.signal);
+			const decoded = await decodeScoreData(payload, supporters.length);
+			if (!decoded.times.length) throw new Error('接口未返回人气数据');
+			let latestIndex = 0;
+			for (let index = 1; index < decoded.times.length; index += 1) {
+				if (decoded.times[index] > decoded.times[latestIndex]) latestIndex = index;
+			}
+			const ranked = supporters
+				.map((supporter, index) => ({
+					id: supporter.id,
+					score: decoded.scores[latestIndex * decoded.characterCount + index] ?? 0
+				}))
+				.sort((a, b) => b.score - a.score || a.id - b.id);
+			supporterPopularity = new Map(
+				ranked.map((entry, index) => [entry.id, { score: entry.score, rank: index + 1 }])
+			);
+		} catch (error) {
+			if (error instanceof DOMException && error.name === 'AbortError') return;
+		}
+	}
+
 	async function loadTimeline() {
 		const isRefresh = snapshots.length > 0 && ranks.length > 0;
 		let refreshBaseline: RankEntry[] = [];
@@ -560,12 +611,15 @@
 	function handleChartRangeChange() {}
 
 	async function initialize() {
-		await loadTimeline();
+		await Promise.all([loadTimeline(), loadSupporterPopularity()]);
 	}
 
 	onMount(() => {
 		void initialize();
-		return () => rankController?.abort();
+		return () => {
+			rankController?.abort();
+			popularityController?.abort();
+		};
 	});
 </script>
 
@@ -611,6 +665,7 @@
 			</div>
 			<div class="supporter-grid">
 				{#each sortedSupporters() as supporter (supporter.id)}
+					{@const popularity = supporterPopularity.get(supporter.id)}
 					<button
 						class="supporter-card"
 						class:active={supporter.id === rankId}
@@ -627,13 +682,31 @@
 							/>
 							<small>{supporter.name}</small>
 						</div>
-						<div class="supporter-card-score"><i>●</i><strong>0</strong></div>
+						<div class="supporter-card-score">
+							<i>●</i>
+							<strong>{popularity?.score ?? '--'}</strong>
+						</div>
 					</button>
 				{/each}
 			</div>
-			<div class="supporter-sortbar">
-				<strong>默认排序</strong>
-				<button onclick={() => (supporterSortDescending = !supporterSortDescending)} aria-label="切换排序方向" title="切换排序方向">{supporterSortDescending ? '↓' : '↑'}</button>
+			<div class="supporter-sortbar" onfocusout={handleSortFocusOut}>
+				<div class="supporter-sort-select">
+					<button
+						class="sort-trigger"
+						onclick={() => (supporterSortMenuOpen = !supporterSortMenuOpen)}
+						aria-haspopup="menu"
+						aria-expanded={supporterSortMenuOpen}
+					>
+						<strong>{supporterSortMode === 'popularity' ? '人气排名' : '默认排序'}</strong>
+					</button>
+					{#if supporterSortMenuOpen}
+						<div class="supporter-sort-menu" role="menu">
+							<button class:selected={supporterSortMode === 'default'} onclick={() => selectSupporterSortMode('default')} role="menuitem">默认排序</button>
+							<button class:selected={supporterSortMode === 'popularity'} onclick={() => selectSupporterSortMode('popularity')} role="menuitem">人气排名</button>
+						</div>
+					{/if}
+				</div>
+				<button class="sort-direction" onclick={() => (supporterSortDescending = !supporterSortDescending)} aria-label="切换排序方向" title="切换排序方向">{supporterSortDescending ? '↓' : '↑'}</button>
 			</div>
 		</aside>
 	{/if}
