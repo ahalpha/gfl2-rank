@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
+	import { decompressGzip } from '$lib/gzip';
+	import { decodeScoreData } from '$lib/rank-decoder';
 	import chars from '$lib/data/chars.json';
 
 	const SCORE_URL = 'https://gf2-api.hamelon.cfd/worldboss_3/rank/score';
@@ -36,18 +38,6 @@
 		return epoch;
 	}
 
-	async function decompressGzip(buffer: ArrayBuffer): Promise<ArrayBuffer> {
-		const bytes = new Uint8Array(buffer);
-		if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) return buffer;
-		if (typeof DecompressionStream === 'undefined') throw new Error('当前浏览器不支持 gzip 数据解压');
-		try {
-			const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
-			return await new Response(stream).arrayBuffer();
-		} catch {
-			throw new Error('总分 gzip 数据解压失败');
-		}
-	}
-
 	function decodeScores(buffer: ArrayBuffer): ScoreSnapshot[] {
 		const view = new DataView(buffer);
 		if (view.byteLength < 4) throw new Error('总分数据不完整');
@@ -69,6 +59,28 @@
 			result.push({ point: { raw: epoch, epoch }, scores });
 		}
 		return result.sort((a, b) => a.point.epoch - b.point.epoch);
+	}
+
+	async function decodeScorePayload(buffer: ArrayBuffer): Promise<ScoreSnapshot[]> {
+		try {
+			const decoded = await decodeScoreData(buffer, characterIds.length);
+			const result: ScoreSnapshot[] = [];
+			for (let snapshotIndex = 0; snapshotIndex < decoded.times.length; snapshotIndex += 1) {
+				const epoch = decoded.times[snapshotIndex];
+				const scores = new Map<number, number>();
+				for (let characterIndex = 0; characterIndex < characterIds.length; characterIndex += 1) {
+					scores.set(characterIds[characterIndex], decoded.scores[snapshotIndex * decoded.characterCount + characterIndex]);
+				}
+				result.push({ point: { raw: epoch, epoch }, scores });
+			}
+			return result.sort((a, b) => a.point.epoch - b.point.epoch);
+		} catch (wasmError) {
+			try {
+				return decodeScores(await decompressGzip(buffer, '总分 gzip 数据解压失败'));
+			} catch {
+				throw wasmError;
+			}
+		}
 	}
 
 	function rankSnapshot(snapshot: ScoreSnapshot): CharacterScore[] {
@@ -110,7 +122,7 @@
 		try {
 			const response = await fetch(SCORE_URL, { signal: controller.signal });
 			if (!response.ok) throw new Error(`请求失败 (${response.status})`);
-			const decoded = decodeScores(await decompressGzip(await response.arrayBuffer()));
+			const decoded = await decodeScorePayload(await response.arrayBuffer());
 			if (!decoded.length) throw new Error('接口未返回总分记录');
 			snapshots = decoded;
 			timeline = decoded.map((snapshot) => snapshot.point);

@@ -3,6 +3,8 @@
 	import { goto } from '$app/navigation';
 	import { fade } from 'svelte/transition';
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
+	import { decompressGzip } from '$lib/gzip';
+	import { decodeRankData } from '$lib/rank-decoder';
 	import chars from '$lib/data/chars.json';
 
 	const DRAG_UPDATE_INTERVAL = 70;
@@ -386,7 +388,7 @@
 		};
 	}
 
-	function decodeGunRanks(buffer: ArrayBuffer): RankSnapshot[] {
+	function decodeGunRanksFallback(buffer: ArrayBuffer): RankSnapshot[] {
 		const view = new DataView(buffer);
 		const decoder = new TextDecoder('utf-8');
 		const SNAPSHOT_BYTES = 8 + 100 * 8;
@@ -508,18 +510,34 @@
 		return decodedSnapshots.sort((a, b) => a.point.epoch - b.point.epoch);
 	}
 
-	async function decompressGzip(buffer: ArrayBuffer): Promise<ArrayBuffer> {
-		const bytes = new Uint8Array(buffer);
-		if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) return buffer;
-		if (typeof DecompressionStream === 'undefined') {
-			throw new Error('Failed to decode');
-		}
-
+	async function decodeGunRanks(buffer: ArrayBuffer): Promise<RankSnapshot[]> {
 		try {
-			const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
-			return await new Response(stream).arrayBuffer();
-		} catch {
-			throw new Error('Failed to decode');
+			const decoded = await decodeRankData(buffer);
+			const decodedSnapshots: RankSnapshot[] = [];
+			for (let snapshotIndex = 0; snapshotIndex < decoded.times.length; snapshotIndex += 1) {
+				const epoch = decoded.times[snapshotIndex];
+				const entries: RankEntry[] = [];
+				for (let rankIndex = 0; rankIndex < 100; rankIndex += 1) {
+					const index = snapshotIndex * 100 + rankIndex;
+					const uid = decoded.uids[index];
+					const info = decoded.info.get(uid);
+					entries.push({
+						id: String(uid),
+						name: info?.name ?? `UID ${uid}`,
+						level: info ? String(info.level) : '--',
+						score: decoded.scores[index],
+						rank: rankIndex + 1
+					});
+				}
+				decodedSnapshots.push({ point: { raw: epoch, epoch }, entries });
+			}
+			return decodedSnapshots.sort((a, b) => a.point.epoch - b.point.epoch);
+		} catch (wasmError) {
+			try {
+				return decodeGunRanksFallback(await decompressGzip(buffer, 'Failed to decode'));
+			} catch {
+				throw wasmError;
+			}
 		}
 	}
 
@@ -535,7 +553,7 @@
 		try {
 			const response = await fetch(url, { signal: timeoutController.signal });
 			if (!response.ok) throw new Error(`请求失败 (${response.status})`);
-			return decompressGzip(await response.arrayBuffer());
+			return response.arrayBuffer();
 		} catch (error) {
 			if (error instanceof DOMException && error.name === 'TimeoutError') {
 				throw new Error('接口响应超时');
@@ -574,7 +592,7 @@
 		rankController = new AbortController();
 		try {
 			const payload = await getBinary(`https://gf2-api.hamelon.cfd/worldboss_3/gun_rank/${rankId}`, rankController.signal);
-			const nextSnapshots = decodeGunRanks(payload);
+			const nextSnapshots = await decodeGunRanks(payload);
 			if (!nextSnapshots.length) throw new Error('接口未返回有效排行快照');
 			snapshots = nextSnapshots;
 			timeline = nextSnapshots.map((snapshot) => snapshot.point);
