@@ -3,9 +3,13 @@
 	import BossHealth from '$lib/BossHealth.svelte';
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
 	import { decodeScoreData } from '$lib/rank-decoder';
-	import chars from '$lib/data/chars.json';
+	import defaultChars from '$lib/data/worldboss_3_chars.json';
 
-	const SCORE_URL = 'https://gf2-api.hamelon.cfd/worldboss_3/rank/score';
+	let {
+		worldboss = 'worldboss_3',
+		chars = defaultChars
+	}: { worldboss?: string; chars?: Record<string, string> } = $props();
+	const scoreUrl = `https://gf2-api.hamelon.cfd/${worldboss}/rank/score`;
 	const characterIds = Object.keys(chars).map(Number).sort((a, b) => a - b);
 	type TimelinePoint = { raw: number; epoch: number };
 	type CharacterScore = { id: number; name: string; score: number; rank: number };
@@ -53,7 +57,7 @@
 			rank1: ranked[0]?.score ?? 0,
 			rank2: ranked[1]?.score ?? 0,
 			rank3: ranked[2]?.score ?? 0,
-			rank100: ranked[57]?.score ?? ranked.at(-1)?.score ?? 0
+			rank100: ranked.at(-1)?.score ?? 0
 		};
 	}
 
@@ -77,7 +81,7 @@
 		controller?.abort();
 		controller = new AbortController();
 		try {
-			const response = await fetch(SCORE_URL, { signal: controller.signal });
+			const response = await fetch(scoreUrl, { signal: controller.signal });
 			if (!response.ok) throw new Error(`请求失败 (${response.status})`);
 			const decoded = await decodeScorePayload(await response.arrayBuffer());
 			if (!decoded.length) throw new Error('接口未返回总分记录');
@@ -106,7 +110,7 @@
 </svelte:head>
 
 <main class="overall-page">
-	<div class="overall-boss-health"><BossHealth selectedEpoch={timeline[selectedIndex]?.epoch} /></div>
+	<div class="overall-boss-health"><BossHealth {worldboss} selectedEpoch={timeline[selectedIndex]?.epoch} /></div>
 	<header class="overall-heading">
 		<div class="overall-title">
 			<h1>人形排行</h1>
@@ -148,7 +152,7 @@
 		<section class="overall-content">
 			<div class="podium-grid">
 				{#each rankings.slice(0, 3) as entry}
-					<a class:champion={entry.rank === 1} class={`podium-card podium-${entry.rank}`} href={`/${entry.id}`}>
+					<a class:champion={entry.rank === 1} class={`podium-card podium-${entry.rank}`} href={`/${worldboss}/${entry.id}`}>
 						<div class="podium-art"><img src={`/Pic/${entry.id}.png`} alt={entry.name} /></div>
 						<div class="podium-rank"><span>排名</span><strong>{entry.rank}</strong></div>
 						<div class="podium-info"><strong>{entry.name}</strong><span>{entry.score}</span></div>
@@ -158,7 +162,7 @@
 
 			<div class="overall-list">
 				{#each rankings.slice(3) as entry}
-					<a href={`/${entry.id}`} class="overall-row">
+					<a href={`/${worldboss}/${entry.id}`} class="overall-row">
 						<strong>{String(entry.rank).padStart(2, '0')}</strong>
 						<img src={`/Avatar/${entry.id}.png`} alt="" />
 						<span>{entry.name}</span>
@@ -175,7 +179,7 @@
 		{:else if error && !timeline.length}
 			<div class="timeline-error"><span>{error}</span><button onclick={loadScores}>重试</button></div>
 		{:else}
-			<RankTimelineChart {timeline} scores={chartScores} {selectedIndex} lastRankLabel="第 58 名" onSelect={selectTime} onRangeChange={() => {}} />
+			<RankTimelineChart {timeline} scores={chartScores} {selectedIndex} lastRankLabel={`第 ${characterIds.length} 名`} onSelect={selectTime} onRangeChange={() => {}} />
 		{/if}
 	</section>
 </main>

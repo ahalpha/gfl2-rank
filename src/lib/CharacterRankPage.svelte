@@ -5,14 +5,18 @@
 	import BossHealth from '$lib/BossHealth.svelte';
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
 	import { decodeRankData, decodeScoreData } from '$lib/rank-decoder';
-	import chars from '$lib/data/chars.json';
+	import defaultChars from '$lib/data/worldboss_3_chars.json';
 
 	const DRAG_UPDATE_INTERVAL = 70;
-	const POPULARITY_URL = 'https://gf2-api.hamelon.cfd/worldboss_3/rank/score';
+	let {
+		initialRankId = 1078,
+		worldboss = 'worldboss_3',
+		chars = defaultChars
+	}: { initialRankId?: number; worldboss?: string; chars?: Record<string, string> } = $props();
+	const popularityUrl = `https://gf2-api.hamelon.cfd/${worldboss}/rank/score`;
 	const supporters = Object.entries(chars)
 		.map(([id, name]) => ({ id: Number(id), name }))
 		.sort((a, b) => a.id - b.id);
-	let { initialRankId = 1078 }: { initialRankId?: number } = $props();
 
 	type JsonRecord = Record<string, unknown>;
 	type TimelinePoint = {
@@ -327,7 +331,7 @@
 		supporterPanelOpen = false;
 		if (id === rankId) return;
 		rankController?.abort();
-		void goto(`/${id}`, { noScroll: true, keepFocus: true });
+		void goto(`/${worldboss}/${id}`, { noScroll: true, keepFocus: true });
 		rankId = id;
 		timeline = [];
 		snapshots = [];
@@ -420,8 +424,9 @@
 		for (let snapshotIndex = 0; snapshotIndex < decoded.times.length; snapshotIndex += 1) {
 			const epoch = decoded.times[snapshotIndex];
 			const entries: RankEntry[] = [];
-			for (let rankIndex = 0; rankIndex < 100; rankIndex += 1) {
-				const index = snapshotIndex * 100 + rankIndex;
+			const start = decoded.offsets[snapshotIndex];
+			const end = decoded.offsets[snapshotIndex + 1];
+			for (let index = start; index < end; index += 1) {
 				const uid = decoded.uids[index];
 				const info = decoded.info.get(uid);
 				entries.push({
@@ -429,7 +434,7 @@
 					name: info?.name ?? `UID ${uid}`,
 					level: info ? String(info.level) : '--',
 					score: decoded.scores[index],
-					rank: rankIndex + 1
+					rank: index - start + 1
 				});
 			}
 			decodedSnapshots.push({ point: { raw: epoch, epoch }, entries });
@@ -465,7 +470,7 @@
 		popularityController?.abort();
 		popularityController = new AbortController();
 		try {
-			const payload = await getBinary(POPULARITY_URL, popularityController.signal);
+			const payload = await getBinary(popularityUrl, popularityController.signal);
 			const decoded = await decodeScoreData(payload, supporters.length);
 			if (!decoded.times.length) throw new Error('接口未返回人气数据');
 			let latestIndex = 0;
@@ -512,7 +517,7 @@
 		rankController?.abort();
 		rankController = new AbortController();
 		try {
-			const payload = await getBinary(`https://gf2-api.hamelon.cfd/worldboss_3/gun_rank/${rankId}`, rankController.signal);
+			const payload = await getBinary(`https://gf2-api.hamelon.cfd/${worldboss}/gun_rank/${rankId}`, rankController.signal);
 			const nextSnapshots = await decodeGunRanks(payload);
 			if (!nextSnapshots.length) throw new Error('接口未返回有效排行快照');
 			snapshots = nextSnapshots;
@@ -634,7 +639,7 @@
 </svelte:head>
 
 <main class="page-shell">
-	<div class="page-boss-health"><BossHealth selectedEpoch={timeline[displayedIndex]?.epoch} /></div>
+	<div class="page-boss-health"><BossHealth {worldboss} selectedEpoch={timeline[displayedIndex]?.epoch} /></div>
 	<!-- 宽屏右侧悬浮频道入口暂时停用。 -->
 
 	{#if supporterPanelOpen}
@@ -714,7 +719,7 @@
 	<section class="rank-section" aria-label="排行榜">
 		<div class="section-heading">
 			<div class="supporter-lockup">
-				<a class="rank-back" href="/" aria-label="返回人形排行" title="返回人形排行">
+				<a class="rank-back" href={`/${worldboss}`} aria-label="返回人形排行" title="返回人形排行">
 					<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7M8 12h10" /></svg>
 				</a>
 				<button

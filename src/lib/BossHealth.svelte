@@ -2,29 +2,28 @@
 	import { onMount } from 'svelte';
 	import { decodeBossInfo } from '$lib/rank-decoder';
 
-	const INFO_URL = 'https://gf2-api.hamelon.cfd/worldboss_3/info';
 	const MAX_HEALTH = 10_000_000_000n;
 	type BossPoint = { epoch: number; health: bigint };
 
-	let { selectedEpoch }: { selectedEpoch?: number } = $props();
+	let { selectedEpoch, worldboss = 'worldboss_3' }: { selectedEpoch?: number; worldboss?: string } = $props();
+	const infoUrl = `https://gf2-api.hamelon.cfd/${worldboss}/info`;
 	let points = $state<BossPoint[]>([]);
 	let failed = $state(false);
 
 	let selectedHealth = $derived.by(() => {
 		if (!points.length || selectedEpoch === undefined) return undefined;
 		let low = 0;
-		let high = points.length - 1;
-		let match = 0;
-		while (low <= high) {
+		let high = points.length;
+		while (low < high) {
 			const middle = (low + high) >>> 1;
-			if (points[middle].epoch <= selectedEpoch) {
-				match = middle;
-				low = middle + 1;
-			} else {
-				high = middle - 1;
-			}
+			if (points[middle].epoch < selectedEpoch) low = middle + 1;
+			else high = middle;
 		}
-		return points[match].health;
+		const next = points[low];
+		const previous = points[low - 1];
+		if (!previous) return next?.health;
+		if (!next) return previous.health;
+		return next.epoch - selectedEpoch < selectedEpoch - previous.epoch ? next.health : previous.health;
 	});
 
 	let fillPercent = $derived.by(() => {
@@ -38,7 +37,7 @@
 		const controller = new AbortController();
 		void (async () => {
 			try {
-				const response = await fetch(INFO_URL, { signal: controller.signal });
+				const response = await fetch(infoUrl, { signal: controller.signal });
 				if (!response.ok) throw new Error(`Boss info request failed (${response.status})`);
 				const decoded = await decodeBossInfo(await response.arrayBuffer());
 				points = Array.from(decoded.times, (epoch, index) => ({ epoch, health: decoded.health[index] }))

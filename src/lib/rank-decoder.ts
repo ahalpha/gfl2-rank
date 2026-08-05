@@ -10,6 +10,7 @@ export type DecodedScoreData = { times: Float64Array; scores: Uint32Array; chara
 export type DecodedBossInfo = { times: Float64Array; health: bigint[] };
 export type DecodedRankData = {
 	times: Float64Array;
+	offsets: Uint32Array;
 	uids: Uint32Array;
 	scores: Uint32Array;
 	info: Map<number, { name: string; level: number }>;
@@ -81,10 +82,13 @@ export async function decodeRankData(buffer: ArrayBuffer): Promise<DecodedRankDa
 	let offset = 4;
 	const times = new Float64Array(bytes.slice(offset, offset + count * 8).buffer);
 	offset += count * 8;
-	const uids = new Uint32Array(bytes.slice(offset, offset + count * 100 * 4).buffer);
-	offset += count * 100 * 4;
-	const scores = new Uint32Array(bytes.slice(offset, offset + count * 100 * 4).buffer);
-	offset += count * 100 * 4;
+	const offsets = new Uint32Array(bytes.slice(offset, offset + (count + 1) * 4).buffer);
+	offset += (count + 1) * 4;
+	const entryCount = offsets[count];
+	const uids = new Uint32Array(bytes.slice(offset, offset + entryCount * 4).buffer);
+	offset += entryCount * 4;
+	const scores = new Uint32Array(bytes.slice(offset, offset + entryCount * 4).buffer);
+	offset += entryCount * 4;
 	const infoCount = view.getUint32(offset, true);
 	offset += 4;
 	const info = new Map<number, { name: string; level: number }>();
@@ -97,5 +101,5 @@ export async function decodeRankData(buffer: ArrayBuffer): Promise<DecodedRankDa
 		info.set(uid, { name: decoder.decode(bytes.subarray(offset, offset + nameLength)), level });
 		offset += nameLength;
 	}
-	return { times, uids, scores, info };
+	return { times, offsets, uids, scores, info };
 }
