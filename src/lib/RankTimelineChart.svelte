@@ -34,7 +34,8 @@
 		onSelect,
 		onRangeChange,
 		onScrubStart,
-		onScrubEnd
+		onScrubEnd,
+		lastRankLabel = '第 100 名'
 	}: {
 		timeline: TimelinePoint[];
 		scores: Record<number, ScorePoint>;
@@ -44,6 +45,7 @@
 		onRangeChange: (start: number, end: number) => void;
 		onScrubStart?: () => void;
 		onScrubEnd?: () => void;
+		lastRankLabel?: string;
 	} = $props();
 
 	let container = $state<HTMLDivElement>();
@@ -58,7 +60,7 @@
 	let touchGestureUsedMultiplePointers = false;
 
 	const seriesDefinitions: Array<{ key: SeriesKey; name: string; color: string }> = [
-		{ key: 'rank100', name: '第 100 名', color: '#c5c4c5' },
+		{ key: 'rank100', name: lastRankLabel, color: '#c5c4c5' },
 		{ key: 'rank3', name: '第 3 名', color: '#4d7cff' },
 		{ key: 'rank2', name: '第 2 名', color: '#ffb356' },
 		{ key: 'rank1', name: '第 1 名', color: '#e93b60' }

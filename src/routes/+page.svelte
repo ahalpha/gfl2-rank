@@ -1,880 +1,293 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { fade } from 'svelte/transition';
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
 	import chars from '$lib/data/chars.json';
 
-	const INITIAL_RANK_ID = 1078;
-	const DRAG_UPDATE_INTERVAL = 70;
-	const supporters = Object.entries(chars).map(([id, name]) => ({ id: Number(id), name }));
+	const SCORE_URL = 'https://gf2-api.hamelon.cfd/worldboss_3/rank/score';
+	const characterIds = Object.keys(chars).map(Number).sort((a, b) => a - b);
+	type TimelinePoint = { raw: number; epoch: number };
+	type CharacterScore = { id: number; name: string; score: number; rank: number };
+	type ScoreSnapshot = { point: TimelinePoint; scores: Map<number, number> };
+	type ChartScorePoint = { rank1: number; rank2: number; rank3: number; rank100: number };
 
-	type JsonRecord = Record<string, unknown>;
-	type TimelinePoint = {
-		raw: string | number;
-		epoch: number;
-	};
-	type RankEntry = {
-		id: string;
-		name: string;
-		level: string;
-		score: number;
-		rank: number;
-		previousRank?: number;
-	};
-	type ChartScorePoint = {
-		rank1: number;
-		rank2: number;
-		rank3: number;
-		rank100: number;
-	};
-	type RankSnapshot = {
-		point: TimelinePoint;
-		entries: RankEntry[];
-	};
-
+	let snapshots = $state<ScoreSnapshot[]>([]);
 	let timeline = $state<TimelinePoint[]>([]);
+	let rankings = $state<CharacterScore[]>([]);
 	let selectedIndex = $state(0);
-	let displayedIndex = $state(0);
-	let ranks = $state<RankEntry[]>([]);
-	let timelineLoading = $state(true);
-	let rankLoading = $state(true);
-	let rankRefreshing = $state(false);
-	let timelineError = $state('');
-	let rankError = $state('');
-	let supporterPanelOpen = $state(false);
-	let rankId = $state(INITIAL_RANK_ID);
-	let supporterSortDescending = $state(false);
 	let chartScores = $state<Record<number, ChartScorePoint>>({});
-	let snapshots = $state<RankSnapshot[]>([]);
-	let rankController: AbortController | undefined;
-	let dragBaseline: RankEntry[] | undefined;
-	let queuedDragIndex: number | undefined;
-	let dragRequestRunning = false;
-	let dragging = false;
-	let lastDragRequestAt = 0;
+	let loading = $state(true);
+	let refreshing = $state(false);
+	let error = $state('');
+	let controller: AbortController | undefined;
 
-	const numberFormatter = new Intl.NumberFormat('zh-CN');
 	const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
-		month: '2-digit',
-		day: '2-digit',
-		hour: '2-digit',
-		minute: '2-digit',
-		second: '2-digit',
-		hour12: false
+		month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
 	});
 
-	function isRecord(value: unknown): value is JsonRecord {
-		return typeof value === 'object' && value !== null && !Array.isArray(value);
-	}
-
-	function firstValue(record: JsonRecord, keys: string[]): unknown {
-		for (const key of keys) {
-			if (record[key] !== undefined && record[key] !== null) return record[key];
-		}
-		return undefined;
-	}
-
-	function normalizeKey(key: string): string {
-		return key.toLowerCase().replaceAll(/[^a-z0-9]/g, '');
-	}
-
-	function deepFirstValue(value: unknown, keys: string[], maxDepth = 5): unknown {
-		const wanted = new Set(keys.map(normalizeKey));
-		const queue: { value: unknown; depth: number }[] = [{ value, depth: 0 }];
-		const visited = new Set<object>();
-
-		while (queue.length) {
-			const current = queue.shift()!;
-			if (!isRecord(current.value) || visited.has(current.value)) continue;
-			visited.add(current.value);
-
-			for (const [key, child] of Object.entries(current.value)) {
-				if (wanted.has(normalizeKey(key)) && child !== undefined && child !== null) return child;
-			}
-			if (current.depth >= maxDepth) continue;
-			for (const child of Object.values(current.value)) {
-				if (isRecord(child)) queue.push({ value: child, depth: current.depth + 1 });
-				else if (Array.isArray(child) && child.length === 1 && isRecord(child[0])) {
-					queue.push({ value: child[0], depth: current.depth + 1 });
-				}
-			}
-		}
-		return undefined;
-	}
-
-	function unwrapArray(payload: unknown, preferredKeys: string[]): unknown[] {
-		if (Array.isArray(payload)) return payload;
-		if (!isRecord(payload)) return [];
-
-		for (const key of [...preferredKeys, 'data', 'result']) {
-			const value = payload[key];
-			if (Array.isArray(value)) return value;
-			if (isRecord(value)) {
-				const nested = unwrapArray(value, preferredKeys);
-				if (nested.length) return nested;
-				const values = Object.values(value);
-				if (values.length && values.every(isRecord)) return values;
-			}
-		}
-		const values = Object.values(payload);
-		if (values.length && values.every(isRecord)) return values;
-		return [];
-	}
-
-	function toEpoch(value: unknown): number | undefined {
-		if (typeof value === 'number' && Number.isFinite(value)) {
-			return value < 10_000_000_000 ? value * 1000 : value;
-		}
-		if (typeof value !== 'string' || !value.trim()) return undefined;
-		const numeric = Number(value);
-		if (Number.isFinite(numeric)) return numeric < 10_000_000_000 ? numeric * 1000 : numeric;
-		const parsed = Date.parse(value);
-		return Number.isNaN(parsed) ? undefined : parsed;
-	}
-
-	function normalizeTimeline(payload: unknown): TimelinePoint[] {
-		const source = unwrapArray(payload, ['timeline', 'times', 'timestamps', 'points']);
-		const points = source.flatMap((item) => {
-			const raw = isRecord(item)
-				? firstValue(item, ['time', 'timestamp', 'created_at', 'createdAt', 'date'])
-				: item;
-			const epoch = toEpoch(raw);
-			return epoch === undefined || (typeof raw !== 'string' && typeof raw !== 'number')
-				? []
-				: [{ raw, epoch }];
-		});
-
-		return points
-			.sort((a, b) => a.epoch - b.epoch)
-			.filter((point, index, values) => index === 0 || point.epoch !== values[index - 1].epoch);
-	}
-
-	function asNumber(value: unknown, fallback = 0): number {
-		const parsed = typeof value === 'string' ? Number(value.replaceAll(',', '')) : Number(value);
-		return Number.isFinite(parsed) ? parsed : fallback;
-	}
-
-	function extractRankRows(payload: unknown): unknown[] {
-		const candidates: { rows: unknown[]; depth: number }[] = [];
-		const visited = new Set<object>();
-
-		function visit(value: unknown, depth: number) {
-			if (depth > 6 || typeof value !== 'object' || value === null || visited.has(value)) return;
-			visited.add(value);
-			if (Array.isArray(value)) {
-				if (value.length && value.every(isRecord)) candidates.push({ rows: value, depth });
-				for (const child of value) visit(child, depth + 1);
-				return;
-			}
-			for (const child of Object.values(value)) visit(child, depth + 1);
-		}
-
-		visit(payload, 0);
-		if (!candidates.length) return unwrapArray(payload, ['ranks', 'rank', 'ranking', 'list', 'items', 'records']);
-
-		const signalKeys = [
-			'rank', 'ranking', 'position', 'name', 'player_name', 'nickname', 'username',
-			'score', 'total_score', 'assist', 'assistance', 'contribution', 'points'
-		];
-		return candidates.sort((a, b) => {
-			const score = (candidate: { rows: unknown[]; depth: number }) => {
-				const sample = candidate.rows.slice(0, 3);
-				const signals = sample.reduce(
-					(total, row) => total + signalKeys.filter((key) => deepFirstValue(row, [key], 3) !== undefined).length,
-					0
-				);
-				return signals * 100 + Math.min(candidate.rows.length, 100) * 4 + candidate.depth;
-			};
-			return score(b) - score(a);
-		})[0].rows;
-	}
-
-	function normalizeRanks(payload: unknown, previous: RankEntry[]): RankEntry[] {
-		const source = extractRankRows(payload);
-		const previousById = new Map(previous.map((entry) => [entry.id, entry.rank]));
-		const normalized = source.map((item, index) => {
-			const record = isRecord(item) ? item : {};
-			const nameValue = deepFirstValue(record, [
-				'name',
-				'player_name',
-				'playerName',
-				'nickname',
-				'username',
-				'display_name',
-				'displayName',
-				'gun_name',
-				'gunName'
-			]);
-			const name = String(nameValue ?? `未知档案 ${index + 1}`);
-			const idValue = deepFirstValue(record, [
-				'user_id',
-				'userId',
-				'player_id',
-				'playerId',
-				'gun_id',
-				'gunId',
-				'uid',
-				'id'
-			]);
-			const score = asNumber(
-				deepFirstValue(record, [
-					'score',
-					'points',
-					'point',
-					'total_score',
-					'totalScore',
-					'total_assistance',
-					'totalAssistance',
-					'contribution',
-					'support_score',
-					'power',
-					'assist',
-					'assist_count',
-					'assistCount',
-					'assist_num',
-					'assistNum',
-					'assistance',
-					'value',
-					'count'
-				])
-			);
-			const rank = asNumber(deepFirstValue(record, ['rank', 'ranking', 'position', 'place']), index + 1);
-			const id = String(idValue ?? name);
-
-			return {
-				id,
-				name,
-				level: String(deepFirstValue(record, ['level', 'lv', 'player_level', 'playerLevel', 'gun_level']) ?? '--'),
-				score,
-				rank,
-				previousRank: previousById.get(id)
-			};
-		});
-
-		return normalized.sort((a, b) => a.rank - b.rank || b.score - a.score);
-	}
-
-	function formatTime(point: TimelinePoint | undefined, includeDate = true): string {
-		if (!point) return '--:--:--';
-		const parts = dateFormatter.formatToParts(new Date(point.epoch));
-		const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-		return includeDate
-			? `${values.month}.${values.day}  ${values.hour}:${values.minute}:${values.second}`
-			: `${values.hour}:${values.minute}`;
-	}
-
-	function scoreWidth(score: number): number {
-		const highest = ranks[0]?.score || 1;
-		return Math.max(7, Math.min(100, (score / highest) * 100));
-	}
-
-	function rankMovement(entry: RankEntry): 'up' | 'down' | 'same' | 'new' {
-		if (entry.previousRank === undefined) return 'new';
-		if (entry.rank < entry.previousRank) return 'up';
-		if (entry.rank > entry.previousRank) return 'down';
-		return 'same';
-	}
-
-	function movementAmount(entry: RankEntry): number {
-		return Math.abs(entry.rank - (entry.previousRank ?? entry.rank));
-	}
-
-	function handleWindowKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') supporterPanelOpen = false;
-	}
-
-	function avatarUrl(id: number): string {
-		return `/Avatar/${id}.png`;
-	}
-
-	function selectedSupporterName(): string {
-		return String(chars[String(rankId) as keyof typeof chars] ?? `人形 ${rankId}`);
-	}
-
-	function sortedSupporters() {
-		return supporterSortDescending ? [...supporters].reverse() : supporters;
-	}
-
-	async function selectSupporter(id: number) {
-		supporterPanelOpen = false;
-		if (id === rankId) return;
-		rankController?.abort();
-		rankId = id;
-		timeline = [];
-		snapshots = [];
-		chartScores = {};
-		ranks = [];
-		selectedIndex = 0;
-		displayedIndex = 0;
-		timelineLoading = true;
-		rankLoading = true;
-		await loadTimeline();
-	}
-
-	function normalizeSnapshots(payload: unknown): RankSnapshot[] {
-		const byTime = new Map<number, RankSnapshot>();
-		const flatRowsByTime = new Map<number, { raw: string | number; rows: JsonRecord[] }>();
-		const visited = new Set<object>();
-		const timeKeys = ['time', 'timestamp', 'record_time', 'recordTime', 'snapshot_time', 'snapshotTime', 'created_at', 'createdAt', 'date'];
-
-		function addSnapshot(rawTime: unknown, value: unknown) {
-			const epoch = toEpoch(rawTime);
-			if (epoch === undefined) return;
-			const rows = extractRankRows(value);
-			if (!rows.length) return;
-			byTime.set(epoch, {
-				point: { raw: rawTime as string | number, epoch },
-				entries: normalizeRanks(rows, []).map((entry) => ({ ...entry, previousRank: undefined }))
-			});
-		}
-
-		function visit(value: unknown, depth: number) {
-			if (depth > 7 || typeof value !== 'object' || value === null || visited.has(value)) return;
-			visited.add(value);
-
-			if (Array.isArray(value)) {
-				for (const child of value) {
-					if (isRecord(child)) {
-						const rawTime = firstValue(child, timeKeys);
-						if (rawTime !== undefined) {
-							addSnapshot(rawTime, child);
-							const directRank = firstValue(child, ['rank', 'ranking', 'position', 'place']);
-							const epoch = toEpoch(rawTime);
-							if (epoch !== undefined && (typeof directRank === 'number' || typeof directRank === 'string')) {
-								const group = flatRowsByTime.get(epoch) ?? {
-									raw: rawTime as string | number,
-									rows: []
-								};
-								group.rows.push(child);
-								flatRowsByTime.set(epoch, group);
-							}
-						}
-					}
-					visit(child, depth + 1);
-				}
-				return;
-			}
-
-			const directTime = firstValue(value, timeKeys);
-			if (directTime !== undefined) addSnapshot(directTime, value);
-			for (const [key, child] of Object.entries(value)) {
-				if (toEpoch(key) !== undefined) addSnapshot(key, child);
-				visit(child, depth + 1);
-			}
-		}
-
-		visit(payload, 0);
-		for (const [epoch, group] of flatRowsByTime) {
-			if (byTime.has(epoch)) continue;
-			byTime.set(epoch, {
-				point: { raw: group.raw, epoch },
-				entries: normalizeRanks(group.rows, []).map((entry) => ({ ...entry, previousRank: undefined }))
-			});
-		}
-		return [...byTime.values()].sort((a, b) => a.point.epoch - b.point.epoch);
-	}
-
-	function scoresFromRanks(entries: RankEntry[]): ChartScorePoint {
-		const scoreAt = (rank: number) =>
-			entries.find((entry) => entry.rank === rank)?.score ?? entries[rank - 1]?.score ?? 0;
-		return {
-			rank1: scoreAt(1),
-			rank2: scoreAt(2),
-			rank3: scoreAt(3),
-			rank100: scoreAt(100)
-		};
-	}
-
-	function decodeGunRanks(buffer: ArrayBuffer): RankSnapshot[] {
-		const view = new DataView(buffer);
-		const decoder = new TextDecoder('utf-8');
-		const SNAPSHOT_BYTES = 8 + 100 * 8;
-		let offset = 0;
-
-		function ensure(bytes: number, field: string) {
-			if (offset + bytes > view.byteLength) throw new Error(`榜单数据不完整：${field}`);
-		}
-
-		function readU16(field: string): number {
-			ensure(2, field);
-			const value = view.getUint16(offset, true);
-			offset += 2;
-			return value;
-		}
-
-		function readU32(field: string): number {
-			ensure(4, field);
-			const value = view.getUint32(offset, true);
-			offset += 4;
-			return value;
-		}
-
-		function readI64(field: string): bigint {
-			ensure(8, field);
-			const value = view.getBigInt64(offset, true);
-			offset += 8;
-			return value;
-		}
-
-		function timestampToEpoch(value: bigint, field: string): number {
-			const absolute = value < 0n ? -value : value;
-			let milliseconds: bigint;
-			if (absolute >= 100_000_000_000_000_000n) {
-				milliseconds = value / 1_000_000n;
-			} else if (absolute >= 100_000_000_000_000n) {
-				milliseconds = value / 1_000n;
-			} else if (absolute >= 100_000_000_000n) {
-				milliseconds = value;
-			} else {
-				milliseconds = value * 1_000n;
-			}
-
-			const epoch = Number(milliseconds);
-			const minimumEpoch = Date.UTC(2000, 0, 1);
-			const maximumEpoch = Date.UTC(2200, 0, 1);
-			if (!Number.isSafeInteger(epoch) || epoch < minimumEpoch || epoch > maximumEpoch) {
-				throw new Error(`榜单数据无效：${field} 不是有效时间戳`);
-			}
-			return epoch;
-		}
-
-		const rankSize = readU32('排行大小');
-		const maxSnapshotCount = Math.floor((view.byteLength - offset - 4) / SNAPSHOT_BYTES);
-		let snapshotCount: number;
-		let rankSectionEnd: number;
-		if (rankSize <= maxSnapshotCount) {
-			snapshotCount = rankSize;
-			rankSectionEnd = offset + snapshotCount * SNAPSHOT_BYTES;
-		} else if (rankSize % SNAPSHOT_BYTES === 0 && offset + rankSize + 4 <= view.byteLength) {
-			snapshotCount = rankSize / SNAPSHOT_BYTES;
-			rankSectionEnd = offset + rankSize;
-		} else {
-			throw new Error('榜单数据无效：排行大小与数据长度不匹配');
-		}
-
-		const decodedSnapshots: RankSnapshot[] = [];
-		for (let snapshotIndex = 0; snapshotIndex < snapshotCount; snapshotIndex += 1) {
-			const encodedTime = readI64(`时间 ${snapshotIndex + 1}`);
-			const epoch = timestampToEpoch(encodedTime, `时间 ${snapshotIndex + 1}`);
-			const rawTime = epoch;
-			const entries: RankEntry[] = [];
-			for (let rankIndex = 0; rankIndex < 100; rankIndex += 1) {
-				const uid = readU32(`UID ${rankIndex + 1}`);
-				const score = readU32(`分数 ${rankIndex + 1}`);
-				entries.push({
-					id: String(uid),
-					name: `UID ${uid}`,
-					level: '--',
-					score,
-					rank: rankIndex + 1
-				});
-			}
-			decodedSnapshots.push({ point: { raw: rawTime, epoch }, entries });
-		}
-		if (offset !== rankSectionEnd) throw new Error('榜单数据无效：排行区偏移不匹配');
-
-		const infoSize = readU32('信息大小');
-		const remainingBytes = view.byteLength - offset;
-		const infoIsCount = infoSize <= Math.floor(remainingBytes / 10);
-		const infoCount = infoIsCount ? infoSize : Number.POSITIVE_INFINITY;
-		const infoSectionEnd = infoIsCount ? view.byteLength : offset + infoSize;
-		if (infoSectionEnd > view.byteLength) throw new Error('榜单数据无效：信息大小超出数据长度');
-
-		const userInfo = new Map<number, { name: string; level: number }>();
-		let infoIndex = 0;
-		while (infoIndex < infoCount && offset < infoSectionEnd) {
-			const uid = readU32(`信息 UID ${infoIndex + 1}`);
-			const nameSize = readU32(`名字大小 ${infoIndex + 1}`);
-			if (offset + nameSize + 2 > infoSectionEnd) throw new Error(`榜单数据不完整：名字 ${infoIndex + 1}`);
-			const name = decoder.decode(new Uint8Array(buffer, offset, nameSize));
-			offset += nameSize;
-			const level = readU16(`等级 ${infoIndex + 1}`);
-			userInfo.set(uid, { name, level });
-			infoIndex += 1;
-		}
-		if (infoIsCount && infoIndex !== infoCount) throw new Error('榜单数据不完整：信息记录数量不足');
-
-		for (const snapshot of decodedSnapshots) {
-			for (const entry of snapshot.entries) {
-				const info = userInfo.get(Number(entry.id));
-				if (info) {
-					entry.name = info.name;
-					entry.level = String(info.level);
-				}
-			}
-		}
-
-		return decodedSnapshots.sort((a, b) => a.point.epoch - b.point.epoch);
+	function epochFromI64(value: bigint): number {
+		const absolute = value < 0n ? -value : value;
+		let milliseconds: bigint;
+		if (absolute >= 100_000_000_000_000_000n) milliseconds = value / 1_000_000n;
+		else if (absolute >= 100_000_000_000_000n) milliseconds = value / 1_000n;
+		else if (absolute >= 100_000_000_000n) milliseconds = value;
+		else milliseconds = value * 1_000n;
+		const epoch = Number(milliseconds);
+		if (!Number.isSafeInteger(epoch)) throw new Error('总分数据包含无效时间');
+		return epoch;
 	}
 
 	async function decompressGzip(buffer: ArrayBuffer): Promise<ArrayBuffer> {
 		const bytes = new Uint8Array(buffer);
 		if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) return buffer;
-		if (typeof DecompressionStream === 'undefined') {
-			throw new Error('Failed to decode');
-		}
-
+		if (typeof DecompressionStream === 'undefined') throw new Error('当前浏览器不支持 gzip 数据解压');
 		try {
 			const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
 			return await new Response(stream).arrayBuffer();
 		} catch {
-			throw new Error('Failed to decode');
+			throw new Error('总分 gzip 数据解压失败');
 		}
 	}
 
-	async function getBinary(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
-		const timeoutController = new AbortController();
-		const abortFromCaller = () => timeoutController.abort(signal?.reason);
-		const timeout = window.setTimeout(
-			() => timeoutController.abort(new DOMException('请求超时', 'TimeoutError')),
-			10_000
-		);
-		signal?.addEventListener('abort', abortFromCaller, { once: true });
-
-		try {
-			const response = await fetch(url, { signal: timeoutController.signal });
-			if (!response.ok) throw new Error(`请求失败 (${response.status})`);
-			return decompressGzip(await response.arrayBuffer());
-		} catch (error) {
-			if (error instanceof DOMException && error.name === 'TimeoutError') {
-				throw new Error('接口响应超时');
+	function decodeScores(buffer: ArrayBuffer): ScoreSnapshot[] {
+		const view = new DataView(buffer);
+		if (view.byteLength < 4) throw new Error('总分数据不完整');
+		const count = view.getUint32(0, true);
+		const recordBytes = 8 + characterIds.length * 4;
+		const expectedBytes = 4 + count * recordBytes;
+		if (expectedBytes > view.byteLength) throw new Error('总分数据长度与时间数量不匹配');
+		let offset = 4;
+		const result: ScoreSnapshot[] = [];
+		for (let index = 0; index < count; index += 1) {
+			const rawTime = view.getBigInt64(offset, true);
+			offset += 8;
+			const scores = new Map<number, number>();
+			for (const id of characterIds) {
+				scores.set(id, view.getUint32(offset, true));
+				offset += 4;
 			}
-			throw error;
-		} finally {
-			window.clearTimeout(timeout);
-			signal?.removeEventListener('abort', abortFromCaller);
+			const epoch = epochFromI64(rawTime);
+			result.push({ point: { raw: epoch, epoch }, scores });
 		}
+		return result.sort((a, b) => a.point.epoch - b.point.epoch);
 	}
 
-	async function loadTimeline() {
-		const isRefresh = snapshots.length > 0 && ranks.length > 0;
-		let refreshBaseline: RankEntry[] = [];
-
-		if (isRefresh) {
-			const previousLatestIndex = snapshots.length - 1;
-			refreshBaseline = normalizeRanks(snapshots[previousLatestIndex].entries, []).map((entry) => ({
-				...entry,
-				previousRank: undefined
-			}));
-			selectedIndex = previousLatestIndex;
-			displayedIndex = previousLatestIndex;
-			ranks = refreshBaseline;
-			dragging = false;
-			dragBaseline = undefined;
-			queuedDragIndex = undefined;
-		}
-
-		timelineLoading = !timeline.length;
-		rankLoading = !ranks.length;
-		rankRefreshing = isRefresh;
-		timelineError = '';
-		rankError = '';
-		rankController?.abort();
-		rankController = new AbortController();
-		try {
-			const payload = await getBinary(`https://gf2-api.hamelon.cfd/worldboss_3/gun_rank/${rankId}`, rankController.signal);
-			const nextSnapshots = decodeGunRanks(payload);
-			if (!nextSnapshots.length) throw new Error('接口未返回有效排行快照');
-			snapshots = nextSnapshots;
-			timeline = nextSnapshots.map((snapshot) => snapshot.point);
-			chartScores = Object.fromEntries(
-				nextSnapshots.map((snapshot, index) => [index, scoresFromRanks(snapshot.entries)])
-			);
-			selectedIndex = timeline.length - 1;
-			displayedIndex = selectedIndex;
-			ranks = normalizeRanks(
-				nextSnapshots[selectedIndex].entries,
-				isRefresh ? refreshBaseline : []
-			);
-		} catch (error) {
-			if (error instanceof DOMException && error.name === 'AbortError') return;
-			const message = error instanceof Error ? error.message : '榜单加载失败';
-			if (!timeline.length) timelineError = message;
-			rankError = message;
-		} finally {
-			timelineLoading = false;
-			rankLoading = false;
-			rankRefreshing = false;
-		}
+	function rankSnapshot(snapshot: ScoreSnapshot): CharacterScore[] {
+		return characterIds
+			.map((id) => ({ id, name: String(chars[String(id) as keyof typeof chars]), score: snapshot.scores.get(id) ?? 0, rank: 0 }))
+			.sort((a, b) => b.score - a.score || a.id - b.id)
+			.map((entry, index) => ({ ...entry, rank: index + 1 }));
 	}
 
-	async function loadRanks(
-		index = selectedIndex,
-		_force = false,
-		comparisonRanks: RankEntry[] = ranks,
-		_dragRequest = false
-	) {
+	function chartPoint(snapshot: ScoreSnapshot): ChartScorePoint {
+		const ranked = rankSnapshot(snapshot);
+		return {
+			rank1: ranked[0]?.score ?? 0,
+			rank2: ranked[1]?.score ?? 0,
+			rank3: ranked[2]?.score ?? 0,
+			rank100: ranked[57]?.score ?? ranked.at(-1)?.score ?? 0
+		};
+	}
+
+	function selectTime(index: number) {
 		const snapshot = snapshots[index];
 		if (!snapshot) return;
-		ranks = normalizeRanks(snapshot.entries, comparisonRanks);
-		displayedIndex = index;
-	}
-
-	function selectTime(event: Event) {
-		const nextIndex = Number((event.currentTarget as HTMLInputElement).value);
-		if (nextIndex === selectedIndex) return;
-		if (!dragging) beginDrag();
-		selectedIndex = nextIndex;
-		queuedDragIndex = nextIndex;
-		void processDragQueue();
-	}
-
-	function beginDrag() {
-		if (dragging) return;
-		dragging = true;
-		dragBaseline = ranks.map((entry) => ({ ...entry }));
-		queuedDragIndex = undefined;
-	}
-
-	async function processDragQueue() {
-		if (dragRequestRunning) return;
-		dragRequestRunning = true;
-
-		try {
-			while (queuedDragIndex !== undefined) {
-				const waitTime = DRAG_UPDATE_INTERVAL - (Date.now() - lastDragRequestAt);
-				if (waitTime > 0) {
-					await new Promise((resolve) => window.setTimeout(resolve, waitTime));
-				}
-				const nextIndex = queuedDragIndex;
-				queuedDragIndex = undefined;
-				lastDragRequestAt = Date.now();
-				await loadRanks(nextIndex, false, dragBaseline ?? ranks, true);
-			}
-		} finally {
-			dragRequestRunning = false;
-			if (!dragging) dragBaseline = undefined;
-		}
-	}
-
-	function endDrag() {
-		if (!dragging) return;
-		dragging = false;
-		if (displayedIndex !== selectedIndex) {
-			queuedDragIndex = selectedIndex;
-			void processDragQueue();
-		} else if (!dragRequestRunning) {
-			dragBaseline = undefined;
-		}
-	}
-
-	function selectChartTime(index: number) {
-		if (index === selectedIndex) return;
-		const ownsGesture = !dragging;
-		if (ownsGesture) beginDrag();
 		selectedIndex = index;
-		queuedDragIndex = index;
-		void processDragQueue();
-		if (ownsGesture) endDrag();
+		rankings = rankSnapshot(snapshot);
 	}
 
-	function handleChartRangeChange() {}
+	function formatTime(point: TimelinePoint | undefined): string {
+		if (!point) return '--:--:--';
+		const parts = Object.fromEntries(dateFormatter.formatToParts(new Date(point.epoch)).map((part) => [part.type, part.value]));
+		return `${parts.month}.${parts.day}  ${parts.hour}:${parts.minute}:${parts.second}`;
+	}
 
-	async function initialize() {
-		await loadTimeline();
+	async function loadScores() {
+		refreshing = snapshots.length > 0;
+		loading = !snapshots.length;
+		error = '';
+		controller?.abort();
+		controller = new AbortController();
+		try {
+			const response = await fetch(SCORE_URL, { signal: controller.signal });
+			if (!response.ok) throw new Error(`请求失败 (${response.status})`);
+			const decoded = decodeScores(await decompressGzip(await response.arrayBuffer()));
+			if (!decoded.length) throw new Error('接口未返回总分记录');
+			snapshots = decoded;
+			timeline = decoded.map((snapshot) => snapshot.point);
+			chartScores = Object.fromEntries(decoded.map((snapshot, index) => [index, chartPoint(snapshot)]));
+			selectTime(decoded.length - 1);
+		} catch (reason) {
+			if (reason instanceof DOMException && reason.name === 'AbortError') return;
+			error = reason instanceof Error ? reason.message : '总分排行加载失败';
+		} finally {
+			loading = false;
+			refreshing = false;
+		}
 	}
 
 	onMount(() => {
-		void initialize();
-		return () => rankController?.abort();
+		void loadScores();
+		return () => controller?.abort();
 	});
 </script>
 
-<svelte:window onkeydown={handleWindowKeydown} />
-
 <svelte:head>
-	<title>闪耀星愿排行榜 · 第三期</title>
-	<meta
-		name="description"
-		content="少女前线2：追放闪耀星愿排行榜。"
-	/>
+	<title>人形排行 · GFL2</title>
+	<meta name="description" content="少女前线2：追放人形总分历史排行榜。" />
 </svelte:head>
 
-<main class="page-shell">
-	<a class="channel-float" href="https://t.me/GF2Lib" target="_blank" rel="noreferrer" aria-label="加入频道">
-		<strong>加入频道</strong>
-		<span aria-hidden="true">
-			<svg viewBox="0 0 24 24"><path d="M20.7 3.4 3.8 9.9c-1.2.5-1.2 1.1-.2 1.4l4.3 1.4 1.7 5.1c.2.6.1.8.8.8.5 0 .8-.2 1-.4l2.1-2 4.4 3.2c.8.5 1.4.3 1.6-.8l2.8-13.3c.3-1.4-.5-2.1-1.6-1.9ZM9.6 12.4l8.4-5.3c.4-.2.8-.1.5.2l-6.9 6.2-.3 3.1-1.7-4.2Z" /></svg>
-		</span>
-	</a>
-
-	{#if supporterPanelOpen}
-		<button
-			class="supporter-backdrop"
-			onclick={() => (supporterPanelOpen = false)}
-			aria-label="关闭应援人形侧栏"
-		></button>
-		<aside class="supporter-panel" aria-label="应援人形" aria-modal="true" role="dialog">
-			<div class="supporter-panel-header">
-				<div>
-					<strong>选择应援人形</strong>
-				</div>
-				<div class="supporter-panel-actions">
-					<a href="https://t.me/GF2Lib" target="_blank" rel="noreferrer" aria-label="加入频道">
-						<strong>加入频道</strong>
-						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.7 3.4 3.8 9.9c-1.2.5-1.2 1.1-.2 1.4l4.3 1.4 1.7 5.1c.2.6.1.8.8.8.5 0 .8-.2 1-.4l2.1-2 4.4 3.2c.8.5 1.4.3 1.6-.8l2.8-13.3c.3-1.4-.5-2.1-1.6-1.9ZM9.6 12.4l8.4-5.3c.4-.2.8-.1.5.2l-6.9 6.2-.3 3.1-1.7-4.2Z" /></svg>
-					</a>
-					<button onclick={() => (supporterPanelOpen = false)} aria-label="关闭侧栏" title="关闭">
-						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
-					</button>
-				</div>
-			</div>
-			<div class="supporter-filters" aria-label="角色分类">
-				<button class="active" aria-label="全部角色" title="全部角色"><i>◆</i></button>
-				<button aria-label="防御" title="防御"><i>⬡</i></button>
-				<button aria-label="火力" title="火力"><i>●</i></button>
-				<button aria-label="突击" title="突击"><i>ϟ</i></button>
-				<button aria-label="支援" title="支援"><i>✦</i></button>
-				<button aria-label="其他" title="其他"><i>•••</i></button>
-			</div>
-			<div class="supporter-grid">
-				{#each sortedSupporters() as supporter (supporter.id)}
-					<button
-						class="supporter-card"
-						class:active={supporter.id === rankId}
-						onclick={() => selectSupporter(supporter.id)}
-						aria-label={`选择${supporter.name}`}
-					>
-						<div class="supporter-portrait">
-							<span>{supporter.name.slice(0, 1)}</span>
-							<img
-								src={avatarUrl(supporter.id)}
-								alt=""
-								onload={(event) => ((event.currentTarget as HTMLImageElement).hidden = false)}
-								onerror={(event) => ((event.currentTarget as HTMLImageElement).hidden = true)}
-							/>
-							<small>{supporter.name}</small>
-						</div>
-						<div class="supporter-card-score"><i>●</i><strong>0</strong></div>
-					</button>
-				{/each}
-			</div>
-			<div class="supporter-sortbar">
-				<strong>默认排序</strong>
-				<button onclick={() => (supporterSortDescending = !supporterSortDescending)} aria-label="切换排序方向" title="切换排序方向">{supporterSortDescending ? '↓' : '↑'}</button>
-			</div>
-		</aside>
-	{/if}
-
-	<section class="rank-section" aria-label="排行榜">
-		<div class="section-heading">
-			<div class="supporter-lockup">
-				<button
-					class="supporter-avatar"
-					onclick={() => (supporterPanelOpen = true)}
-					aria-label="打开应援人形侧栏"
-					title="应援人形"
-				>
-					<span>{selectedSupporterName().slice(0, 1)}</span>
-					{#key rankId}
-						<img src={avatarUrl(rankId)} alt={selectedSupporterName()} onerror={(event) => ((event.currentTarget as HTMLImageElement).hidden = true)} />
-					{/key}
-					<i aria-hidden="true"><b></b><b></b></i>
-				</button>
-				<div class="supporter-copy">
-					<span>当前应援人形：</span>
-					<strong>{selectedSupporterName()}</strong>
-				</div>
-			</div>
-			<div class="record-lockup">
-				<div class="record-copy">
-					<span>记录时间</span>
-					<strong>{formatTime(timeline[displayedIndex])}</strong>
-				</div>
-				<button class="refresh-button" onclick={initialize} aria-label="刷新排行榜" title="刷新排行榜">
-					<svg class:spinning={rankRefreshing} viewBox="0 0 24 24" aria-hidden="true">
-						<path d="M20 11a8.1 8.1 0 0 0-14.9-4L3 9m0-4v4h4M4 13a8.1 8.1 0 0 0 14.9 4L21 15m0 4v-4h-4" />
-					</svg>
-				</button>
-			</div>
+<main class="overall-page">
+	<header class="overall-heading">
+		<div class="overall-title">
+			<h1>人形排行</h1>
+			<a href="https://t.me/GF2Lib" target="_blank" rel="noreferrer" aria-label="加入频道">
+				<strong>加入频道</strong>
+				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.7 3.4 3.8 9.9c-1.2.5-1.2 1.1-.2 1.4l4.3 1.4 1.7 5.1c.2.6.1.8.8.8.5 0 .8-.2 1-.4l2.1-2 4.4 3.2c.8.5 1.4.3 1.6-.8l2.8-13.3c.3-1.4-.5-2.1-1.6-1.9ZM9.6 12.4l8.4-5.3c.4-.2.8-.1.5.2l-6.9 6.2-.3 3.1-1.7-4.2Z" /></svg>
+			</a>
 		</div>
-
-		<div class="column-labels" aria-hidden="true">
-			<span>排名</span><span>玩家信息</span><span>累计助力值</span>
+		<div class="overall-actions">
+			<div><span>记录时间</span><strong>{formatTime(timeline[selectedIndex])}</strong></div>
+			<button onclick={loadScores} aria-label="刷新总分排行" title="刷新总分排行">
+				<svg class:spinning={refreshing} viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-14.9-4L3 9m0-4v4h4M4 13a8.1 8.1 0 0 0 14.9 4L21 15m0 4v-4h-4" /></svg>
+			</button>
 		</div>
+	</header>
 
-		{#if rankLoading}
-			<div class="rank-list skeleton-list" aria-label="正在载入排行榜">
-				{#each Array(12) as _, index}
-					<div class="rank-row skeleton-row" style={`--delay:${index * 55}ms`}>
-						<div class="skeleton rank-placeholder"></div>
-						<div class="skeleton name-placeholder"></div>
-						<div class="skeleton score-placeholder"></div>
+	{#if loading}
+		<section class="overall-content overall-loading" aria-label="正在载入人形排行">
+			<div class="podium-grid">
+				{#each Array(3) as _, index}
+					<div class:champion={index === 0} class="podium-card podium-skeleton">
+						<div class="loading-shimmer rank-skeleton"></div>
+						<div class="loading-shimmer art-skeleton"></div>
+						<div class="loading-shimmer info-skeleton"></div>
 					</div>
 				{/each}
 			</div>
-		{:else if rankError && !ranks.length}
-			<div class="state-panel">
-				<div class="state-code">OFFLINE</div>
-				<h3>无法读取排行榜</h3>
-				<p>{rankError}</p>
-				<button onclick={() => loadRanks(selectedIndex, true)}>重新连接</button>
-			</div>
-		{:else if !ranks.length}
-			<div class="state-panel">
-				<div class="state-code">NO DATA</div>
-				<h3>该时间点暂无记录</h3>
-				<p>沿时间轴切换到其他有效记录点。</p>
-			</div>
-		{:else}
-			<div
-				class="rank-list motion-list"
-				class:refreshing={rankRefreshing}
-				style={`--row-count:${ranks.length}`}
-			>
-				{#each ranks as entry, index (entry.id)}
-					<article
-						class:podium={entry.rank <= 3}
-						class={`rank-row rank-${Math.min(entry.rank, 4)}`}
-						style={`--row-index:${index}`}
-						in:fade={{ duration: 160 }}
-						out:fade={{ duration: 180 }}
-					>
-						<div class="score-fill" style={`width:${scoreWidth(entry.score)}%`}></div>
-						<div class="rank-number">
-							<strong>{String(entry.rank).padStart(2, '0')}</strong>
-							<span>BEST OF TOP</span>
-						</div>
-						<div class="operator">
-							<div class="operator-name">
-								<strong>{entry.name}</strong>
-								{#if rankMovement(entry) === 'up'}
-									<span class="movement up" title="名次上升">▲ {movementAmount(entry)}</span>
-								{:else if rankMovement(entry) === 'down'}
-									<span class="movement down" title="名次下降">▼ {movementAmount(entry)}</span>
-								{/if}
-							</div>
-							<span class="level">Lv.{entry.level}</span>
-						</div>
-						<div class="score">
-							<span>累计助力</span>
-							<strong>{entry.score}</strong>
-						</div>
-					</article>
+			<div class="overall-list">
+				{#each Array(12) as _}
+					<div class="overall-row row-skeleton">
+						<i class="loading-shimmer"></i><i class="loading-shimmer"></i><i class="loading-shimmer"></i><i class="loading-shimmer"></i>
+					</div>
 				{/each}
 			</div>
-		{/if}
-	</section>
-
-	<section class="timeline-panel" aria-label="历史时间轴">
-		{#if timelineLoading}
-			<div class="timeline-loading"><span></span>正在读取有效时间点</div>
-		{:else if timelineError}
-			<div class="timeline-error">
-				<span>{timelineError}</span>
-				<button onclick={initialize}>重试</button>
+		</section>
+	{:else if error && !rankings.length}
+		<div class="overall-state error"><strong>无法读取总分排行</strong><span>{error}</span><button onclick={loadScores}>重试</button></div>
+	{:else}
+		<section class="overall-content">
+			<div class="podium-grid">
+				{#each rankings.slice(0, 3) as entry}
+					<a class:champion={entry.rank === 1} class={`podium-card podium-${entry.rank}`} href={`/${entry.id}`}>
+						<div class="podium-art"><img src={`/Pic/${entry.id}.png`} alt={entry.name} /></div>
+						<div class="podium-rank"><span>排名</span><strong>{entry.rank}</strong></div>
+						<div class="podium-info"><strong>{entry.name}</strong><span>{entry.score}</span></div>
+					</a>
+				{/each}
 			</div>
+
+			<div class="overall-list">
+				{#each rankings.slice(3) as entry}
+					<a href={`/${entry.id}`} class="overall-row">
+						<strong>{String(entry.rank).padStart(2, '0')}</strong>
+						<img src={`/Avatar/${entry.id}.png`} alt="" />
+						<span>{entry.name}</span>
+						<b>{entry.score}</b>
+					</a>
+				{/each}
+			</div>
+		</section>
+	{/if}
+
+	<section class="timeline-panel" aria-label="人形总分时间轴">
+		{#if loading}
+			<div class="timeline-loading"><span></span>正在读取有效时间点</div>
+		{:else if error && !timeline.length}
+			<div class="timeline-error"><span>{error}</span><button onclick={loadScores}>重试</button></div>
 		{:else}
-			<RankTimelineChart
-				{timeline}
-				scores={chartScores}
-				{selectedIndex}
-				loadingCount={0}
-				onSelect={selectChartTime}
-				onRangeChange={handleChartRangeChange}
-				onScrubStart={beginDrag}
-				onScrubEnd={endDrag}
-			/>
+			<RankTimelineChart {timeline} scores={chartScores} {selectedIndex} lastRankLabel="第 58 名" onSelect={selectTime} onRangeChange={() => {}} />
 		{/if}
 	</section>
 </main>
+
+<style>
+	.overall-page { width:100%; height:100dvh; min-height:0; padding:24px 0 150px; overflow:hidden; color:#25292c; }
+	.overall-heading,.overall-content,.overall-state { width:min(1120px,calc(100% - 40px)); margin-left:auto; margin-right:auto; }
+	.overall-heading { min-height:56px; display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; padding:0 16px; }
+	.overall-heading h1 { margin:0; font-size:24px; line-height:1; font-weight:900; letter-spacing:0; }
+	.overall-title { display:flex; align-items:center; gap:18px; }
+	.overall-title > a { height:30px; padding:0 9px 0 12px; display:flex; align-items:center; justify-content:center; gap:6px; color:#fff; background:#2da9df; border-radius:16px; text-decoration:none; transform:translateY(2px); }
+	.overall-title > a strong { font-size:12px; line-height:1; white-space:nowrap; }
+	.overall-title > a svg { width:17px; height:17px; display:block; flex:0 0 auto; fill:currentColor; }
+	.overall-actions { display:flex; align-items:center; gap:18px; }
+	.overall-actions > div { display:grid; gap:2px; text-align:right; }
+	.overall-actions > div span { color:#747a80; font-size:11px; font-weight:800; letter-spacing:0; }
+	.overall-actions > div strong { color:#202327; font:800 16px Consolas,monospace; }
+	.overall-actions button { width:42px; height:42px; display:grid; place-items:center; color:#fff; background:#34383b; border:1px solid #555b5f; border-radius:3px; }
+	.overall-actions svg { width:24px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+	.overall-content { display:grid; grid-template-columns:.78fr 1fr; gap:18px; align-items:start; }
+	.podium-grid { grid-column:2; align-self:center; display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+	.podium-card { position:relative; min-height:210px; overflow:visible; color:#272b2e; background:#cfd2d4; border:8px solid rgba(191,195,197,.72); border-radius:22px; box-shadow:0 5px 14px rgba(34,38,41,.2); text-decoration:none; }
+	.podium-card.champion { grid-column:1/-1; min-height:250px; }
+	.podium-card::before { content:''; position:absolute; inset:5px 5px 48px; border:4px solid #f7f7f7; border-radius:15px; background:radial-gradient(circle at 52% 45%,rgba(255,255,255,.26),transparent 36%),linear-gradient(120deg,#666b6e,#bfc3c5 48%,#7c8285); box-shadow:0 2px 8px rgba(42,46,49,.22); overflow:hidden; }
+	.podium-1::before { background:linear-gradient(118deg,transparent 0 66%,rgba(255,179,86,.9) 66% 71%,rgba(233,59,96,.8) 71% 77%,rgba(77,124,255,.72) 77% 84%,transparent 84%),radial-gradient(circle at 50% 58%,transparent 0 58px,rgba(255,255,255,.1) 59px 108px,transparent 109px),linear-gradient(125deg,#515658 0%,#7f8588 46%,#a97791 72%,#75cde1 100%); }
+	.podium-2::before { background:radial-gradient(circle at 52% 62%,transparent 0 45px,rgba(255,255,255,.11) 46px 82px,transparent 83px),linear-gradient(125deg,#666b6e,#d09a51 72%,#c2c5c6); }
+	.podium-3::before { background:radial-gradient(circle at 52% 62%,transparent 0 45px,rgba(255,255,255,.11) 46px 82px,transparent 83px),linear-gradient(125deg,#666b6e,#758bd6 72%,#c2c5c6); }
+	.podium-art { position:absolute; z-index:1; left:9px; right:9px; top:9px; bottom:52px; overflow:hidden; border-radius:11px; pointer-events:none; }
+	.podium-card img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:center -24px; filter:drop-shadow(8px 9px 5px rgba(20,23,25,.46)); }
+	.podium-card:not(.champion) img { object-position:center -12px; transform:scale(1.25); transform-origin:50% 45%; }
+	.podium-card.champion img { object-position:center -46px; }
+	.podium-rank { position:absolute; z-index:3; top:-5px; left:-5px; min-width:112px; padding:10px 12px; display:flex; align-items:center; justify-content:space-between; color:#fff; background:#292d30; border:5px solid #111; border-radius:14px; box-shadow:0 4px 7px rgba(0,0,0,.32); }
+	.podium-rank span { font-size:15px; font-weight:900; }
+	.podium-rank strong { color:#e93b60; font-size:43px; line-height:.8; }
+	.podium-2 .podium-rank strong { color:#ffb356; }
+	.podium-3 .podium-rank strong { color:#4d7cff; }
+	.podium-info { position:absolute; z-index:2; inset:auto 8px 3px; height:43px; padding:4px 8px; display:flex; align-items:center; justify-content:space-between; color:#292d30; background:transparent; }
+	.podium-info strong { font-size:22px; }
+	.podium-info span { font-size:21px; font-weight:900; }
+	.overall-list { grid-column:1; grid-row:1; height:max(240px,calc(100dvh - 210px)); min-height:0; display:grid; align-content:start; gap:8px; overflow:auto; }
+	.overall-row { min-height:66px; padding:5px 18px 5px 14px; display:grid; grid-template-columns:66px 48px 1fr auto; align-items:center; gap:10px; overflow:hidden; color:#f4f5f5; background:#3b3f42; border:3px solid #c3c6c8; border-radius:34px; text-decoration:none; box-shadow:inset 5px 0 #8b9195; }
+	.overall-row > strong { width:100%; padding-right:4px; font-size:26px; line-height:1; font-style:italic; text-align:center; transform:translate(-10px,-1px); }
+	.overall-row img { width:46px; height:46px; object-fit:cover; border:2px solid #858c90; border-radius:50%; }
+	.overall-row span { overflow:hidden; font-size:18px; font-weight:800; text-overflow:ellipsis; white-space:nowrap; }
+	.overall-row b { font-size:19px; font-variant-numeric:tabular-nums; }
+	.overall-state { min-height:420px; display:grid; place-content:center; justify-items:center; gap:10px; border:1px dashed #9da3a7; }
+	.overall-state.error button { padding:8px 18px; color:#fff; background:#34383b; border:0; }
+	.podium-skeleton { overflow:hidden; }
+	.loading-shimmer { display:block; background:linear-gradient(90deg,#b8bdc0 22%,#e0e3e4 42%,#b8bdc0 62%) 0 0/260% 100%; animation:overall-shimmer 1.45s linear infinite; }
+	.art-skeleton { position:absolute; inset:9px 9px 52px; border-radius:11px; }
+	.rank-skeleton { position:absolute; z-index:2; top:10px; left:10px; width:105px; height:54px; border-radius:10px; }
+	.info-skeleton { position:absolute; left:16px; right:16px; bottom:13px; height:17px; }
+	.row-skeleton i { height:14px; border-radius:7px; }
+	.row-skeleton i:nth-child(1) { width:38px; }
+	.row-skeleton i:nth-child(2) { width:42px; height:42px; border-radius:50%; }
+	.row-skeleton i:nth-child(3) { width:min(150px,72%); }
+	.row-skeleton i:nth-child(4) { width:82px; justify-self:end; }
+	@keyframes overall-shimmer { to { background-position:-160% 0; } }
+	@media(max-width:760px) {
+		.overall-page { height:auto; min-height:100vh; padding:12px 0 140px; overflow:visible; }
+		.overall-heading,.overall-content,.overall-state { width:calc(100% - 12px); }
+		.overall-heading { min-height:46px; padding:0 10px; margin-bottom:15px; }
+		.overall-heading h1 { font-size:20px; }
+		.overall-title { gap:10px; }
+		.overall-title > a { height:28px; padding:0 7px 0 9px; gap:4px; }
+		.overall-title > a strong { font-size:11px; }
+		.overall-title > a svg { width:15px; height:15px; }
+		.overall-actions { gap:8px; }
+		.overall-actions > div strong { font-size:11px; }
+		.overall-content { display:flex; flex-direction:column; }
+		.podium-grid { width:100%; }
+		.podium-card { min-height:160px; }
+		.podium-card.champion { min-height:195px; }
+		.podium-card img { object-position:center -16px; }
+		.podium-card:not(.champion) img { object-position:center -8px; transform:scale(1.18); }
+		.podium-card.champion img { object-position:center -28px; }
+		.podium-rank { min-width:84px; padding:7px 9px; }
+		.podium-rank strong { font-size:32px; }
+		.podium-info strong,.podium-info span { font-size:16px; }
+		.overall-list { width:100%; height:auto; min-height:0; }
+		.overall-row { grid-template-columns:48px 40px 1fr auto; min-height:58px; padding-inline:10px; }
+		.overall-row img { width:38px; height:38px; }
+		.overall-row span,.overall-row b { font-size:14px; }
+	}
+</style>
