@@ -5,6 +5,7 @@
 	import BossHealth from '$lib/BossHealth.svelte';
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
 	import { decodeRankData, decodeScoreData } from '$lib/rank-decoder';
+	import { getWorldbossMeta } from '$lib/worldboss';
 	import defaultChars from '$lib/data/worldboss_3_chars.json';
 
 	const DRAG_UPDATE_INTERVAL = 70;
@@ -13,6 +14,7 @@
 		worldboss = 'worldboss_3',
 		chars = defaultChars
 	}: { initialRankId?: number; worldboss?: string; chars?: Record<string, string> } = $props();
+	const worldbossMeta = getWorldbossMeta(worldboss);
 	const popularityUrl = `https://gf2-api.hamelon.cfd/${worldboss}/rank/score`;
 	const supporters = Object.entries(chars)
 		.map(([id, name]) => ({ id: Number(id), name }))
@@ -631,7 +633,7 @@
 <svelte:window onkeydown={handleWindowKeydown} />
 
 <svelte:head>
-	<title>闪耀星愿排行榜 · 第三期</title>
+	<title>{selectedSupporterName()} · {worldbossMeta.fullName} · GF2</title>
 	<meta
 		name="description"
 		content="少女前线2：追放闪耀星愿排行榜。"

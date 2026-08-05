@@ -3,12 +3,14 @@
 	import BossHealth from '$lib/BossHealth.svelte';
 	import RankTimelineChart from '$lib/RankTimelineChart.svelte';
 	import { decodeScoreData } from '$lib/rank-decoder';
+	import { getWorldbossMeta } from '$lib/worldboss';
 	import defaultChars from '$lib/data/worldboss_3_chars.json';
 
 	let {
 		worldboss = 'worldboss_3',
 		chars = defaultChars
 	}: { worldboss?: string; chars?: Record<string, string> } = $props();
+	const worldbossMeta = getWorldbossMeta(worldboss);
 	const scoreUrl = `https://gf2-api.hamelon.cfd/${worldboss}/rank/score`;
 	const characterIds = Object.keys(chars).map(Number).sort((a, b) => a - b);
 	type TimelinePoint = { raw: number; epoch: number };
@@ -105,7 +107,7 @@
 </script>
 
 <svelte:head>
-	<title>人形排行 · GFL2</title>
+	<title>{worldbossMeta.fullName} · GF2</title>
 	<meta name="description" content="少女前线2：追放人形总分历史排行榜。" />
 </svelte:head>
 
@@ -113,7 +115,7 @@
 	<div class="overall-boss-health"><BossHealth {worldboss} selectedEpoch={timeline[selectedIndex]?.epoch} /></div>
 	<header class="overall-heading">
 		<div class="overall-title">
-			<h1>人形排行</h1>
+			<h1>{worldbossMeta.shortName}</h1>
 			<a href="https://t.me/GF2Lib" target="_blank" rel="noreferrer" aria-label="加入频道">
 				<strong>加入频道</strong>
 				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.7 3.4 3.8 9.9c-1.2.5-1.2 1.1-.2 1.4l4.3 1.4 1.7 5.1c.2.6.1.8.8.8.5 0 .8-.2 1-.4l2.1-2 4.4 3.2c.8.5 1.4.3 1.6-.8l2.8-13.3c.3-1.4-.5-2.1-1.6-1.9ZM9.6 12.4l8.4-5.3c.4-.2.8-.1.5.2l-6.9 6.2-.3 3.1-1.7-4.2Z" /></svg>
