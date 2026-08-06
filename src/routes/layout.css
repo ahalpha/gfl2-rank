@@ -27,6 +27,17 @@ button { cursor: pointer; }
 .page-shell { min-height: 100vh; padding-bottom: 130px; }
 .page-boss-health { width: 100%; margin: 0; }
 
+html:has(.page-shell),
+body:has(.page-shell) {
+	scrollbar-width: none;
+	-ms-overflow-style: none;
+}
+
+html:has(.page-shell)::-webkit-scrollbar,
+body:has(.page-shell)::-webkit-scrollbar {
+	display: none;
+}
+
 .channel-float { display: none; }
 
 @media (min-width: 1441px) {
@@ -196,7 +207,7 @@ button { cursor: pointer; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .rank-section { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 24px 1px 42px; }
-.section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding: 0 8px; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding: 0 16px; }
 .section-heading h2 { margin: 2px 0 0; font-size: 24px; line-height: 1.1; letter-spacing: 0; }
 .column-labels { display: grid; grid-template-columns: 148px 1fr 220px; padding: 0 28px 7px; color: #7c8287; font-size: 10px; font-weight: 800; letter-spacing: .12em; }
 .column-labels span:last-child { text-align: right; }
