@@ -141,8 +141,8 @@
 				{/each}
 			</div>
 			<div class="overall-list">
-				{#each Array(12) as _}
-					<div class="overall-row row-skeleton">
+				{#each Array(12) as _, index}
+					<div class="overall-row row-skeleton" style={`--delay:${index * 55}ms`}>
 						<i class="loading-shimmer"></i><i class="loading-shimmer"></i><i class="loading-shimmer"></i><i class="loading-shimmer"></i>
 					</div>
 				{/each}
@@ -236,12 +236,15 @@
 	.art-skeleton { position:absolute; inset:9px 9px 52px; border-radius:11px; }
 	.rank-skeleton { position:absolute; z-index:2; top:10px; left:10px; width:105px; height:54px; border-radius:10px; }
 	.info-skeleton { position:absolute; left:16px; right:16px; bottom:13px; height:17px; }
-	.row-skeleton i { height:14px; border-radius:7px; }
+	.overall-loading .overall-list { opacity:.55; }
+	.row-skeleton { border-left-color:#a7abad; animation:overall-skeleton-in .35s both; animation-delay:var(--delay); }
+	.row-skeleton i { height:14px; border-radius:2px; background:linear-gradient(90deg,#565b5f 25%,#6b7074 45%,#565b5f 65%) 0 0/300% 100%; animation-duration:1.5s; }
 	.row-skeleton i:nth-child(1) { width:38px; }
 	.row-skeleton i:nth-child(2) { width:42px; height:42px; border-radius:50%; }
 	.row-skeleton i:nth-child(3) { width:min(150px,72%); }
 	.row-skeleton i:nth-child(4) { width:82px; justify-self:end; }
 	@keyframes overall-shimmer { to { background-position:-160% 0; } }
+	@keyframes overall-skeleton-in { from { opacity:0; transform:translateY(8px); } }
 	@media(max-width:760px) {
 		.overall-page { height:auto; min-height:100vh; padding:0 0 40px; overflow:visible; }
 		.overall-heading,.overall-content,.overall-state { width:calc(100% - 12px); }
@@ -269,5 +272,8 @@
 		.overall-row { grid-template-columns:48px 40px 1fr auto; min-height:58px; padding-inline:10px; }
 		.overall-row img { width:38px; height:38px; }
 		.overall-row span,.overall-row b { font-size:14px; }
+		.row-skeleton i:nth-child(1) { width:30px; }
+		.row-skeleton i:nth-child(2) { width:36px; height:36px; }
+		.row-skeleton i:nth-child(4) { width:62px; }
 	}
 </style>
