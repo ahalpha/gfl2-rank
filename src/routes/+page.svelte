@@ -196,7 +196,7 @@
 	.overall-title > a { height:30px; padding:0 9px 0 12px; display:flex; align-items:center; justify-content:center; gap:6px; color:#fff; background:#2da9df; border-radius:16px; text-decoration:none; transform:translateY(2px); }
 	.overall-title > a strong { font-size:12px; line-height:1; white-space:nowrap; }
 	.overall-title > a svg { width:17px; height:17px; display:block; flex:0 0 auto; fill:currentColor; }
-	.overall-actions { display:flex; align-items:center; gap:17.7px; }
+	.overall-actions { display:flex; align-items:center; gap:18px; }
 	.overall-actions > div { display:grid; gap:2px; text-align:right; }
 	.overall-actions > div span { color:#747a80; font-size:11px; font-weight:800; letter-spacing:0; }
 	.overall-actions > div strong { color:#202327; font:800 16px Consolas,monospace; }
@@ -247,9 +247,9 @@
 	@keyframes overall-skeleton-in { from { opacity:0; transform:translateY(8px); } }
 	@media(max-width:760px) {
 		.overall-page { height:auto; min-height:100vh; padding:0 0 40px; overflow:visible; }
-		.overall-heading,.overall-content,.overall-state { width:calc(100% - 12px); }
+		.overall-heading,.overall-content,.overall-state { width:calc(100% - 16px); }
 		.overall-boss-health { width:100%; margin-bottom:6px; padding:0; }
-		.overall-heading { min-height:46px; padding:0 10px; margin-top:12px; margin-bottom:15px; }
+		.overall-heading { min-height:46px; padding:0 12px; margin-top:12px; margin-bottom:15px; }
 		.overall-heading h1 { font-size:20px; }
 		.overall-title { gap:10px; }
 		.overall-title > a { height:28px; padding:0 7px 0 9px; gap:4px; }

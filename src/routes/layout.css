@@ -28,13 +28,17 @@ button { cursor: pointer; }
 .page-boss-health { width: 100%; margin: 0; }
 
 html:has(.page-shell),
-body:has(.page-shell) {
+body:has(.page-shell),
+html:has(.overall-page),
+body:has(.overall-page) {
 	scrollbar-width: none;
 	-ms-overflow-style: none;
 }
 
 html:has(.page-shell)::-webkit-scrollbar,
-body:has(.page-shell)::-webkit-scrollbar {
+body:has(.page-shell)::-webkit-scrollbar,
+html:has(.overall-page)::-webkit-scrollbar,
+body:has(.overall-page)::-webkit-scrollbar {
 	display: none;
 }
 
@@ -338,7 +342,7 @@ body:has(.page-shell)::-webkit-scrollbar {
 	.page-boss-health { width: 100%; }
 	.supporter-panel { width: calc(100vw - 10px); padding-inline: 10px; }
 	.rank-section { width: calc(100% - 14px); padding-top: 12px; }
-	.section-heading { margin-bottom: 15px; }
+	.section-heading { margin-bottom: 15px; padding: 0 12px; }
 	.section-heading h2 { font-size: 21px; }
 	.supporter-lockup { gap: 9px; }
 	.rank-back { width:34px; height:34px; }
