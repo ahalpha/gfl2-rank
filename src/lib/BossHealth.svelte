@@ -16,14 +16,11 @@
 		let high = points.length;
 		while (low < high) {
 			const middle = (low + high) >>> 1;
-			if (points[middle].epoch < selectedEpoch) low = middle + 1;
+			if (points[middle].epoch <= selectedEpoch) low = middle + 1;
 			else high = middle;
 		}
-		const next = points[low];
-		const previous = points[low - 1];
-		if (!previous) return next?.health;
-		if (!next) return previous.health;
-		return next.epoch - selectedEpoch < selectedEpoch - previous.epoch ? next.health : previous.health;
+		// 血量是随时间保持的状态，只使用选定时间之前（含同一时刻）的最后记录。
+		return points[low - 1]?.health ?? points[0].health;
 	});
 
 	let fillPercent = $derived.by(() => {
